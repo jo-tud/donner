@@ -1,6 +1,6 @@
 {
   "name": "donner-mail",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Local full-text index for Thunderbird mail. Fast search, threads and SQL over your mailbox for AI agents — an index layer on top of thunderbird-cli.",
   "type": "module",
   "bin": {

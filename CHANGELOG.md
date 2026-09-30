@@ -6,6 +6,8 @@ The JSON output shape, error codes and MCP tool names are the public API.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-09-30
+
 ### Fixed
 - Windows: `donner setup` finds an npm-installed Claude Code (`claude.cmd`); `reset` and
   `uninstall --purge` explain when the index is still open in another program (`INDEX_IN_USE`).

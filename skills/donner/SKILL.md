@@ -4,7 +4,7 @@ description: Search, read, count and analyse the user's email from Mozilla Thund
 license: MIT
 compatibility: Requires donner (npm install -g donner-mail, then `donner setup`) with a built index, which reads mail through thunderbird-cli's bridge. Search works offline; `donner sync` and `donner resolve` need Thunderbird + tb-bridge running.
 metadata:
-  version: 0.3.1
+  version: 0.3.2
   mcp-server: donner mcp
   companion: thunderbird-cli
 ---
