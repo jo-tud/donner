@@ -16,7 +16,7 @@ Verschieben oder Löschen bleiben bei `tb`.
 Thunderbird muss laufen und [thunderbird-cli](https://github.com/vitalio-sh/thunderbird-cli#quick-start) eingerichtet sein. Dann:
 
 ```bash
-npm install -g github:jo-tud/donner
+npm install -g donner-mail
 donner setup
 ```
 
@@ -30,7 +30,7 @@ donner setup
 
 Danach Claude Desktop neu starten.
 
-**Aktualisieren:** Installationsbefehl erneut ausführen, danach wieder `donner setup`.
+**Aktualisieren:** `npm install -g donner-mail@latest`, danach wieder `donner setup`.
 **Entfernen:** `donner uninstall` (mit `--purge --yes` auch Index und Config), dann `npm uninstall -g donner-mail`.
 
 ## Erste Schritte

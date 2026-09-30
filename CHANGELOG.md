@@ -6,6 +6,18 @@ The JSON output shape, error codes and MCP tool names are the public API.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-09-30
+
+### Changed
+- Published on npm: install with `npm install -g donner-mail`, update with
+  `npm install -g donner-mail@latest`; README, quick start and skill say so.
+- Same code as 0.3.0, which was withdrawn from npm (packaging metadata only).
+
+## [0.3.0] — 2026-09-30
+
+Second field test. The index is upgraded automatically (schema 4); the next sync re-reads calendar
+mails, incomplete authentication results, empty bodies and replies whose text was filed as quote.
+
 ### Added
 - `donner setup`: one command for installation and updates — checks Thunderbird/thunderbird-cli
   and pdftotext, registers the MCP server in Claude Desktop (settings kept, `.bak` written) and
@@ -14,11 +26,6 @@ The JSON output shape, error codes and MCP tool names are the public API.
 - `donner uninstall [--purge --yes]`: removes service, Claude registrations and skill (and with
   `--purge` the index and config).
 - `donner service stop`; `service install` restarts a running service so updates take effect.
-
-## [0.3.0] — 2026-09-30
-
-Second field test. The index is upgraded automatically (schema 4); the next sync re-reads calendar
-mails, incomplete authentication results, empty bodies and replies whose text was filed as quote.
 
 ### Fixed
 - Calendar: only the newest version of an event counts (SEQUENCE, RECURRENCE-ID); cancellations

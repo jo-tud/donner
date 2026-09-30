@@ -48,9 +48,11 @@ flowchart LR
 Have Thunderbird open with [thunderbird-cli](https://github.com/vitalio-sh/thunderbird-cli#quick-start) set up, then:
 
 ```bash
-npm install -g github:jo-tud/donner
+npm install -g donner-mail
 donner setup
 ```
+
+(Latest development version: `npm install -g github:jo-tud/donner`.)
 
 `donner setup` does everything in one go and tells you what it did:
 
@@ -66,7 +68,7 @@ donner setup
 Then restart Claude Desktop. Options: `--yes` (no questions), `--no-sync`, `--no-service`,
 `--no-claude`, `--interval 5min`.
 
-**Updating:** run the install command again, then `donner setup` again — it updates the Claude
+**Updating:** `npm install -g donner-mail@latest`, then `donner setup` again — it updates the Claude
 registrations, the skill and the service and upgrades the index (the next sync re-reads only what
 newer versions extract better; see the [changelog](CHANGELOG.md)).
 

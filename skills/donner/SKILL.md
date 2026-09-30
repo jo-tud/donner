@@ -2,9 +2,9 @@
 name: donner
 description: Search, read, count and analyse the user's email from Mozilla Thunderbird through donner, a fast local full-text index (CLI `donner` or the donner MCP tools mail_*). Use whenever the user asks about their mail — "find the email about X", "what did Y write about Z", "summarise the thread with…", "how much did I pay … this year", "when did I last hear from …", "which PDFs mention …", "unanswered mails", "who emails me most", "which mails look like phishing", "what meetings am I invited to" — including questions that need attachment content (PDF invoices, Office documents, calendar invites) or aggregation over many messages. For actions (reply, move, tag, archive, delete) combine it with thunderbird-cli (`tb`).
 license: MIT
-compatibility: Requires donner (npm i -g github:jo-tud/donner, then `donner setup`) with a built index, which reads mail through thunderbird-cli's bridge. Search works offline; `donner sync` and `donner resolve` need Thunderbird + tb-bridge running.
+compatibility: Requires donner (npm install -g donner-mail, then `donner setup`) with a built index, which reads mail through thunderbird-cli's bridge. Search works offline; `donner sync` and `donner resolve` need Thunderbird + tb-bridge running.
 metadata:
-  version: 0.3.0
+  version: 0.3.1
   mcp-server: donner mcp
   companion: thunderbird-cli
 ---
