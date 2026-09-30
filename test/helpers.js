@@ -53,6 +53,9 @@ export async function setupIndexed({ count = 400, seed = 42, authToken = null, s
     TB_AUTH_TOKEN: authToken || "",
   };
   if (!authToken) delete env.TB_AUTH_TOKEN;
+  // A FORCE_COLOR from the developer's shell next to NO_COLOR makes Node print a warning on
+  // stderr, which would sit in front of donner's JSON error output.
+  delete env.FORCE_COLOR;
   delete env.DONNER_AUTH_TOKEN;
   const out = {
     corpus,
@@ -100,7 +103,8 @@ export function runCli(args, { env = process.env, input = null, timeoutMs = 6000
         json = JSON.parse(stdout);
       } catch {
         try {
-          json = JSON.parse(stderr);
+          // Ignore Node's own warnings ("(node:123) Warning: …") in front of the JSON error.
+          json = JSON.parse(stderr.split("\n").filter((l) => !/^\(node:\d+\)|^\(Use `node --trace/.test(l)).join("\n"));
         } catch {
           // not JSON
         }
