@@ -1,0 +1,64 @@
+{
+  "name": "donner-mail",
+  "version": "0.3.0",
+  "description": "Local full-text index for Thunderbird mail. Fast search, threads and SQL over your mailbox for AI agents — an index layer on top of thunderbird-cli.",
+  "type": "module",
+  "bin": {
+    "donner": "bin/donner.js"
+  },
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "skills/",
+    "docs/",
+    "README.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"test/unit/*.test.js\" \"test/integration/*.test.js\"",
+    "test:unit": "node --test \"test/unit/*.test.js\"",
+    "demo": "node test/demo.js",
+    "bench": "node test/bench.js",
+    "check": "node scripts/check.js"
+  },
+  "dependencies": {
+    "postal-mime": "^4.0.0"
+  },
+  "devDependencies": {
+    "ws": "^8.18.0"
+  },
+  "keywords": [
+    "thunderbird",
+    "email",
+    "search",
+    "full-text-search",
+    "sqlite",
+    "fts5",
+    "mcp",
+    "mcp-server",
+    "ai-agent",
+    "claude",
+    "cli",
+    "local-first",
+    "privacy"
+  ],
+  "author": "Johannes",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jo-tud/donner.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jo-tud/donner/issues"
+  },
+  "homepage": "https://github.com/jo-tud/donner#readme"
+}
