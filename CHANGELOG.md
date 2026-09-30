@@ -6,6 +6,13 @@ The JSON output shape, error codes and MCP tool names are the public API.
 
 ## [Unreleased]
 
+### Fixed
+- Windows: `donner setup` finds an npm-installed Claude Code (`claude.cmd`); `reset` and
+  `uninstall --purge` explain when the index is still open in another program (`INDEX_IN_USE`).
+- Tests run on macOS and Windows (platform paths, line endings via `.gitattributes`, open
+  handles); CI uses actions/checkout and setup-node v5.
+- `DONNER_NO_SERVICE_MANAGER=1` writes/removes service files without calling systemctl/launchctl.
+
 ## [0.3.1] — 2026-09-30
 
 ### Changed

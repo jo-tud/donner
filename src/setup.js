@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, copyFileSync, realpathSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { configPath, ensurePrivateDir, writeDefaultConfig } from "./config.js";
 
@@ -68,9 +68,26 @@ export function registerClaudeDesktop({ remove = false } = {}) {
   return { status, path };
 }
 
+/**
+ * Run the `claude` CLI without a shell. On Windows an npm-installed Claude Code is a
+ * `claude.cmd` shim, which Node can only start through cmd.exe; arguments are then quoted, and
+ * anything cmd.exe could still interpret (%, ", line breaks) is refused.
+ */
+function runClaude(args, opts = {}) {
+  try {
+    return execFileSync("claude", args, opts);
+  } catch (err) {
+    if (process.platform !== "win32" || err.code !== "ENOENT") throw err;
+  }
+  if (args.some((a) => /["%\r\n]/.test(a))) throw Object.assign(new Error("argument cannot be passed to claude.cmd safely"), { code: "UNSAFE_ARG" });
+  const quoted = args.map((a) => (/[\s&|<>^(),;=]/.test(a) ? `"${a}"` : a));
+  return execSync(["claude.cmd", ...quoted].join(" "), opts); // cmd.exe
+
+}
+
 function findClaudeCli() {
   try {
-    execFileSync("claude", ["--version"], { stdio: "ignore", timeout: 15000 });
+    runClaude(["--version"], { stdio: "ignore", timeout: 15000 });
     return true;
   } catch {
     return false;
@@ -82,7 +99,7 @@ export function registerClaudeCode({ remove = false } = {}) {
   if (!findClaudeCli()) return { status: "not-found" };
   let had = false;
   try {
-    execFileSync("claude", ["mcp", "remove", "--scope", "user", "donner"], { stdio: "ignore", timeout: 30000 });
+    runClaude(["mcp", "remove", "--scope", "user", "donner"], { stdio: "ignore", timeout: 30000 });
     had = true;
   } catch {
     // not registered
@@ -92,7 +109,7 @@ export function registerClaudeCode({ remove = false } = {}) {
   // The name goes before -e: -e takes several values and would swallow it.
   const envArgs = Object.entries(e.env || {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
   try {
-    execFileSync("claude", ["mcp", "add", "--scope", "user", "donner", ...envArgs, "--", e.command, ...e.args], { stdio: ["ignore", "ignore", "pipe"], timeout: 30000 });
+    runClaude(["mcp", "add", "--scope", "user", "donner", ...envArgs, "--", e.command, ...e.args], { stdio: ["ignore", "ignore", "pipe"], timeout: 30000 });
     return { status: had ? "updated" : "added" };
   } catch (err) {
     const why = String(err.stderr || "").trim().split("\n")[0] || err.message.split("\n")[0];

@@ -213,6 +213,7 @@ test("invalid configuration values are reported", async () => {
 });
 
 test("reset needs --yes and removes the index", async () => {
+  env.db.close(); // Windows cannot delete a file this test process still has open
   const x = await runCli(["reset"], { env: env.env });
   assert.equal(x.code, 2);
   assert.ok(existsSync(env.dbPath));

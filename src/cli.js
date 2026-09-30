@@ -675,7 +675,7 @@ Afterwards: npm uninstall -g donner-mail`,
       const removed = [];
       for (const f of [ctx.dbPath, ctx.dbPath + "-wal", ctx.dbPath + "-shm", ctx.dbPath + ".lock", ctx.cfg.paths.config]) {
         if (existsSync(f)) {
-          rmSync(f);
+          removeIndexFile(f);
           removed.push(f);
         }
       }
@@ -684,6 +684,19 @@ Afterwards: npm uninstall -g donner-mail`,
     ctx.out({ removed: done }, () => [...done.map((x) => `${ctx.st.green("✔")} ${ctx.st.bold(x.name)}: ${x.detail}`), ctx.st.dim("Finally: npm uninstall -g donner-mail")].join("\n"));
   },
 });
+
+/** Delete an index file; on Windows an open file cannot be deleted — say who holds it. */
+function removeIndexFile(path) {
+  try {
+    rmSync(path);
+  } catch (err) {
+    if (err.code === "EBUSY" || err.code === "EPERM") {
+      throw new DonnerError("INDEX_IN_USE", `${path} is in use by another program.`,
+        "Quit Claude Desktop / Claude Code (donner's MCP server) and stop the background service (`donner service stop`), then try again.");
+    }
+    throw err;
+  }
+}
 
 command("reset", {
   summary: "Delete the index (Thunderbird is not touched)",
@@ -696,7 +709,7 @@ command("reset", {
       const removed = [];
       for (const suffix of ["", "-wal", "-shm"]) {
         if (existsSync(ctx.dbPath + suffix)) {
-          rmSync(ctx.dbPath + suffix);
+          removeIndexFile(ctx.dbPath + suffix);
           removed.push(ctx.dbPath + suffix);
         }
       }

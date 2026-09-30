@@ -54,7 +54,7 @@ export async function setupIndexed({ count = 400, seed = 42, authToken = null, s
   };
   if (!authToken) delete env.TB_AUTH_TOKEN;
   delete env.DONNER_AUTH_TOKEN;
-  return {
+  const out = {
     corpus,
     h,
     dir,
@@ -66,15 +66,19 @@ export async function setupIndexed({ count = 400, seed = 42, authToken = null, s
     env,
     resync: (opts = {}) => sync({ db, bridge, cfg, ...opts }),
     async cleanup() {
-      try {
-        db.close();
-      } catch {
-        // closed
+      // Tests may replace env.db; close every connection (Windows cannot delete open files).
+      for (const d of new Set([db, out.db])) {
+        try {
+          d.close();
+        } catch {
+          // closed
+        }
       }
       await h.stop();
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     },
   };
+  return out;
 }
 
 /** Run the CLI; resolves {code, stdout, stderr, json}. */

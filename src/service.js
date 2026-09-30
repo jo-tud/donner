@@ -8,6 +8,13 @@ import { fileURLToPath } from "node:url";
 
 const LABEL = "io.github.jo-tud.donner";
 
+// Service manager calls (systemctl/launchctl). DONNER_NO_SERVICE_MANAGER=1 only writes and
+// removes the files, e.g. in tests or when a packager manages the service.
+function manage(cmd, args) {
+  if (process.env.DONNER_NO_SERVICE_MANAGER === "1") throw Object.assign(new Error("service manager disabled"), { code: "DISABLED" });
+  return execFileSync(cmd, args, { stdio: "ignore" });
+}
+
 function donnerBin() {
   return realpathSync(join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "donner.js"));
 }
@@ -93,10 +100,10 @@ export async function serviceCommand(sub, { interval }) {
       writeFileSync(path, systemdUnit(interval), { mode: 0o600 });
       let enabled = false;
       try {
-        execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
-        execFileSync("systemctl", ["--user", "enable", "--now", "donner.service"], { stdio: "ignore" });
+        manage("systemctl", ["--user", "daemon-reload"]);
+        manage("systemctl", ["--user", "enable", "--now", "donner.service"]);
         // Pick up a new donner version or changed settings if it was already running.
-        execFileSync("systemctl", ["--user", "restart", "donner.service"], { stdio: "ignore" });
+        manage("systemctl", ["--user", "restart", "donner.service"]);
         enabled = true;
       } catch {
         // systemd user session not available (e.g. container); the file is still written
@@ -111,7 +118,7 @@ export async function serviceCommand(sub, { interval }) {
     }
     if (sub === "stop") {
       try {
-        execFileSync("systemctl", ["--user", "stop", "donner.service"], { stdio: "ignore" });
+        manage("systemctl", ["--user", "stop", "donner.service"]);
         return { path, stopped: true, message: "stopped donner.service" };
       } catch {
         return { path, stopped: false, message: "donner.service is not running" };
@@ -119,7 +126,7 @@ export async function serviceCommand(sub, { interval }) {
     }
     if (sub === "uninstall") {
       try {
-        execFileSync("systemctl", ["--user", "disable", "--now", "donner.service"], { stdio: "ignore" });
+        manage("systemctl", ["--user", "disable", "--now", "donner.service"]);
       } catch {
         // not running
       }
@@ -134,12 +141,12 @@ export async function serviceCommand(sub, { interval }) {
       writeFileSync(path, launchdPlist(interval), { mode: 0o600 });
       let loaded = false;
       try {
-        execFileSync("launchctl", ["unload", path], { stdio: "ignore" }); // reload a running agent
+        manage("launchctl", ["unload", path]); // reload a running agent
       } catch {
         // not loaded
       }
       try {
-        execFileSync("launchctl", ["load", "-w", path], { stdio: "ignore" });
+        manage("launchctl", ["load", "-w", path]);
         loaded = true;
       } catch {
         // already loaded or launchctl unavailable
@@ -148,7 +155,7 @@ export async function serviceCommand(sub, { interval }) {
     }
     if (sub === "stop") {
       try {
-        execFileSync("launchctl", ["unload", path], { stdio: "ignore" });
+        manage("launchctl", ["unload", path]);
         return { path, stopped: true, message: "stopped the donner agent" };
       } catch {
         return { path, stopped: false, message: "the donner agent is not running" };
@@ -156,7 +163,7 @@ export async function serviceCommand(sub, { interval }) {
     }
     if (sub === "uninstall") {
       try {
-        execFileSync("launchctl", ["unload", "-w", path], { stdio: "ignore" });
+        manage("launchctl", ["unload", "-w", path]);
       } catch {
         // not loaded
       }

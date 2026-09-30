@@ -148,6 +148,7 @@ reports "ambiguous" or "not found", run `donner sync` and search again — never
 | `AUTH_REQUIRED` | bridge token missing: set `TB_AUTH_TOKEN` like the bridge |
 | `TIMEOUT` | Thunderbird busy; retry later |
 | `SYNC_RUNNING` | another sync is running; searching works meanwhile |
+| `INDEX_IN_USE` | (Windows) the index is open in another program; quit Claude / stop the service first |
 | `NOT_FOUND` | unknown donner id (deleted?) → search again |
 | `INVALID_ARGS` / `UNKNOWN_COMMAND` | fix the query or flags (message and hint say how) |
 | `SQL_REJECTED` / `SQL_TIMEOUT` / `SQL_TOO_BIG` | single read-only SELECT only; add LIMIT/filters |
