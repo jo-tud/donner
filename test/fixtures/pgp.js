@@ -10,15 +10,34 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 let sharedHome = null;
+let sharedHomeError = null;
+
+/**
+ * The shared throwaway keyring, or null when gpg is missing or cannot create a test key
+ * (e.g. the MSYS gpg that ships with Git on Windows CI runners). Callers skip then.
+ */
+export function usableGpgHome() {
+  try {
+    return sharedGpgHome();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Process-wide throwaway keyring for corpus fixtures (integration tests, demo, bench).
  * Created lazily when gpg is installed and removed when the process exits; the user's real
- * keyring is never involved.
+ * keyring is never involved. Throws (every time) when the key cannot be created.
  */
 export function sharedGpgHome() {
+  if (sharedHomeError) throw sharedHomeError;
   if (!sharedHome) {
-    sharedHome = makeGpgHome();
+    try {
+      sharedHome = makeGpgHome();
+    } catch (err) {
+      sharedHomeError = err;
+      throw err;
+    }
     process.on("exit", () => {
       try {
         sharedHome?.cleanup();

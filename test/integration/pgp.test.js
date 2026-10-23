@@ -10,17 +10,19 @@ import { setupIndexed, idByMid } from "../helpers.js";
 import { search, show, count } from "../../src/ops.js";
 import { purgeDecrypted, countDecrypted, tx } from "../../src/db.js";
 import { hasGpg } from "../../src/pgp.js";
-import { sharedGpgHome } from "../fixtures/pgp.js";
+import { usableGpgHome } from "../fixtures/pgp.js";
 
+// Created at load time so the skip flags below know whether real ciphertext is available.
+const gpgHome = hasGpg() ? usableGpgHome() : null;
 let envAll; // index.decryptPgp: true — every account
 let envOne; // index.decryptPgp: ["Privat"] — per-account opt-in
 let prevHome;
 
 before(async () => {
   // The corpus encrypts to the throwaway keyring; the sync's gpg child processes must find it.
-  if (hasGpg()) {
+  if (gpgHome) {
     prevHome = process.env.GNUPGHOME;
-    process.env.GNUPGHOME = sharedGpgHome().home;
+    process.env.GNUPGHOME = gpgHome.home;
   }
   envAll = await setupIndexed({ count: 60, seed: 7, index: { decryptPgp: true } });
   envOne = await setupIndexed({ count: 60, seed: 7, index: { decryptPgp: ["Privat"] } });
@@ -33,10 +35,11 @@ after(async () => {
 });
 
 const cases = () => envAll.corpus.facts.pgp.cases;
-// Static skip flags: evaluated at registration time, before the fixtures exist. The corpus
-// encrypts its cases exactly when gpg is installed, which is what these flags reflect.
-const withKey = hasGpg() ? false : "gpg is not installed";
-const withoutKey = hasGpg() ? "gpg is installed" : false;
+// Static skip flags, evaluated at registration time. The corpus encrypts its cases exactly
+// when the throwaway keyring can be created (gpg installed and able to generate a key; the
+// gpg that ships with Git on Windows runners is not), which is what these flags reflect.
+const withKey = gpgHome ? false : hasGpg() ? "gpg cannot create a test key here" : "gpg is not installed";
+const withoutKey = gpgHome ? "gpg with a test key is available" : false;
 
 test("is:encrypted finds both encrypted messages (decrypted or not)", () => {
   const r = search(envAll.db, { query: "is:encrypted", fields: ["id", "mid"] });

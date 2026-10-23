@@ -6,7 +6,7 @@
 //   facts:    ground truth that tests assert against
 
 import { buildMessage, buildPdf, buildDocx, buildXlsx, buildIcs } from "./mime-builder.js";
-import { buildPgpMime, buildInlinePgp, encrypt, sharedGpgHome } from "./pgp.js";
+import { buildPgpMime, buildInlinePgp, encrypt, usableGpgHome } from "./pgp.js";
 import { hasGpg, ARMOR_BEGIN, ARMOR_END } from "../../src/pgp.js";
 
 function mulberry32(seed) {
@@ -713,12 +713,7 @@ export function generateCorpus({ seed = 42, count = 600, maxAttachmentKB = 64, s
   // (test/integration/pgp.test.js). Without gpg the same messages carry broken armor: detection
   // and is:encrypted still work; decryption itself is unit-tested in test/unit/pgp.test.js.
   {
-    let gpg = null;
-    try {
-      if (hasGpg()) gpg = sharedGpgHome();
-    } catch {
-      gpg = null;
-    }
+    const gpg = hasGpg() ? usableGpgHome() : null;
     const broken = `${ARMOR_BEGIN}\nbroken\n${ARMOR_END}`;
     const cases = [];
 
