@@ -163,5 +163,6 @@ per-session ids). `test/fixtures/harness.js` runs thunderbird-cli's **real** `br
 process) and **real** `background.js` (in a `vm` context) on top of it. For benchmarks the fake
 Thunderbird and the extension run in their own process (`test/fixtures/tb-process.js`), as in reality. `test/fixtures/corpus.js`
 generates a deterministic German/English mailbox with threads, PDF invoices, Office documents,
-calendar invites, newsletters, prompt-injection mails, charset edge cases, duplicates and a
-message without Message-ID.
+calendar invites, newsletters, prompt-injection mails, charset edge cases, duplicates, encrypted
+mail (PGP/MIME with protected headers and inline PGP, encrypted to a throwaway key when gpg is
+installed) and a message without Message-ID.

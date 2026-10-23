@@ -4,7 +4,7 @@
 // The GPG homes used here live in temp directories and are removed afterwards; the user's
 // keyring is never touched (see test/fixtures/pgp.js).
 
-import { test, before, after } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { findArmored, isPgpMime, isPgpAttachment, stripCryptoSuffix, decryptGpg, hasGpg, countSecretKeys, ARMOR_BEGIN } from "../../src/pgp.js";
 import { parseRawMessage } from "../../src/mime.js";
@@ -18,17 +18,27 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const skip = hasGpg() ? false : "gpg is not installed";
 const me = { name: "Anna Schmidt", email: "anna@example.com" };
 const bob = { name: "Jürgen Müller", email: "J.Mueller@Example.com" };
 const outer = { from: "Jürgen Müller <j.mueller@example.com>", to: "anna@example.com", subject: "pEp", date: "Fri, 2 Jan 2026 10:00:00 +0000", messageId: "outer@example.com" };
 
-let keyring; // home with the test key
-let empty; // home without any key
-before(() => {
-  keyring = makeGpgHome();
-  empty = makeGpgHome({ withKey: false });
-});
+// The gpg tests need a working gpg (e.g. Windows CI has none) and a throwaway keyring. The
+// fixtures are set up at load time so that a setup failure becomes a skip, not a broken file.
+let keyring = null; // home with the test key
+let empty = null; // home without any key
+let setupError = null;
+if (hasGpg()) {
+  try {
+    keyring = makeGpgHome();
+    empty = makeGpgHome({ withKey: false });
+  } catch (err) {
+    setupError = err;
+    keyring?.cleanup();
+    empty?.cleanup();
+    keyring = empty = null;
+  }
+}
+const skip = keyring ? false : hasGpg() ? `gpg test key setup failed: ${setupError?.message || setupError}` : "gpg is not installed";
 after(() => {
   keyring?.cleanup();
   empty?.cleanup();

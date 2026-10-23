@@ -9,6 +9,27 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+let sharedHome = null;
+
+/**
+ * Process-wide throwaway keyring for corpus fixtures (integration tests, demo, bench).
+ * Created lazily when gpg is installed and removed when the process exits; the user's real
+ * keyring is never involved.
+ */
+export function sharedGpgHome() {
+  if (!sharedHome) {
+    sharedHome = makeGpgHome();
+    process.on("exit", () => {
+      try {
+        sharedHome?.cleanup();
+      } catch {
+        // best effort
+      }
+    });
+  }
+  return sharedHome;
+}
+
 const TEST_UID = "Donner Test <donner-test@invalid>";
 
 /** Temp GNUPGHOME with one RSA test key (no passphrase). Returns {home, cleanup}. */
