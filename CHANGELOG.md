@@ -7,19 +7,32 @@ The JSON output shape, error codes and MCP tool names are the public API.
 ## [Unreleased]
 
 ### Added
-- PGP-verschlüsselte Mails werden beim Indizieren lokal entschlüsselt (`index.decryptPgp`, standardmäßig
-  an) und sind danach wie jede andere Mail durchsuchbar: PGP/MIME mit protected headers (der innere
-  Subject/From/To gewinnt; ein abweichender äußerer Subject bleibt als `subject_mismatch`-Signal),
-  Inline-PGP und verschlüsselte Anhänge (`.gpg`/`.pgp`/`.asc`). gpg läuft nur als lokaler Kindprozess
-  (stdin/stdout) — keine Passphrase-Behandlung, kein Key-Export.
-- `is:encrypted`, `trust.encrypted`/`trust.decrypted`/`trust.decrypt_error` und das Suchfeld `encrypted`:
-  das Signal „war verschlüsselt“ bleibt erhalten, obwohl der Klartext im Index liegt.
+- PGP-verschlüsselte Mails können beim Indizieren lokal entschlüsselt werden (PGP/MIME mit protected
+  headers — der innere Subject/From/To gewinnt, ein abweichender äußerer Subject bleibt als
+  `subject_mismatch`-Signal —, Inline-PGP und verschlüsselte Anhänge (`.gpg`/`.pgp`/`.asc`)). gpg läuft
+  nur als lokaler Kindprozess (stdin/stdout) — keine Passphrase-Behandlung, kein Key-Export.
+- Die Entschlüsselung ist **Opt-in pro Konto** (`index.decryptPgp`: `true` | `false` | Kontoliste,
+  z.B. `["Firma"]`): `donner setup` und der erste interaktive `donner sync` fragen einmal und merken
+  sich die Antwort, `donner sync --decrypt-pgp all|none|<konten>` entscheidet nicht-interaktiv.
+  Hintergrund-Syncs (Service, MCP-Auto-Sync) fragen nie und lassen verschlüsselte Mails ohne Inhalt,
+  bis entschieden wurde.
+- `is:encrypted`, `trust.encrypted`/`trust.decrypted`/`trust.decrypt_error`, `trust.subject_mismatch`
+  und das Suchfeld `encrypted`: das Signal „war verschlüsselt" bleibt erhalten, obwohl der Klartext
+  im Index liegt.
+- `donner purge decrypted [--account …] [--yes]`: entfernt bereits gespeicherten Klartext aus dem Index
+  (Body, Zitate, Anhangstext, Kalenderdaten aus dem verschlüsselten Teil). Die Mails bleiben als Header
+  mit `is:encrypted` stehen und können mit `donner sync --reparse pgp` erneut entschlüsselt werden —
+  der Aufräumpfad für Konten, deren Entschlüsselung wieder abgewählt wird.
+- `index.hideEncrypted`: verschlüsselte Mails bleiben aus Standardergebnissen von `search`/`count`/
+  `threads` (Kontext-Hygiene für Agenten, keine Sicherheitsgrenze — `is:encrypted` und `donner sql`
+  sehen sie weiterhin).
 - Fehlgeschlagene Entschlüsselung (fehlender Schlüssel, leerer gpg-agent-Cache, kaputte Nachricht) bricht
   nie einen Sync ab: Body bleibt leer, `is:encrypted` wird gesetzt und die nächsten Syncs versuchen es
   erneut (bis zu 3 Versuche); `donner sync --reparse pgp` startet eine neue Runde.
-- `donner doctor` prüft gpg und Schlüsselbund. Die Index-Schema-Aktualisierung (Schema 5) markiert
-  Mail ohne Text automatisch zum erneuten Lesen — die bereits indizierten verschlüsselten Mails werden
-  so nachträglich entschlüsselt, ohne einen vollen Re-Sync.
+- `donner doctor` zeigt den Entscheidungsstand (noch nicht gewählt / an für welche Konten / aus) und prüft
+  gpg und Schlüsselbund. Die Index-Schema-Aktualisierung (Schema 5) markiert Mail ohne Text automatisch
+  zum erneuten Lesen — bereits indizierte verschlüsselte Mails werden so nachträglich entschlüsselt,
+  wenn die Entschlüsselung für ihr Konto aktiv ist.
 
 ## [0.3.2] — 2026-09-30
 

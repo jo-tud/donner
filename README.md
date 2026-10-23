@@ -61,11 +61,13 @@ donner setup
 1. checks that Thunderbird is reachable through thunderbird-cli (and whether `pdftotext` and `gpg` are installed),
 2. registers donner as an MCP server in **Claude Desktop** and **Claude Code** (if installed; your
    other settings are kept, the previous file is saved as `.bak`),
-3. installs the agent skill for Claude Code,
-4. builds the index (the first run takes a while — Thunderbird hands out one message at a time;
+3. asks whether PGP-encrypted mail should be decrypted and indexed — opt-in, for all accounts or
+   only some (saved in the config; `donner sync --decrypt-pgp …` does the same non-interactively),
+4. installs the agent skill for Claude Code,
+5. builds the index (the first run takes a while — Thunderbird hands out one message at a time;
    Ctrl-C is safe, it continues later),
-5. asks whether addresses that send under your name but are not known yet are yours,
-6. installs a background service that keeps the index fresh (systemd user unit / launchd agent).
+6. asks whether addresses that send under your name but are not known yet are yours,
+7. installs a background service that keeps the index fresh (systemd user unit / launchd agent).
 
 Then restart Claude Desktop. Options: `--yes` (no questions), `--no-sync`, `--no-service`,
 `--no-claude`, `--interval 5min`.
@@ -263,11 +265,17 @@ the donner config file. Background services do not see your shell's `TB_AUTH_TOK
 file if your bridge requires one.
 
 Other index options: `"pdftotext"` (`"auto"`: use poppler's pdftotext when installed, sandboxed with a
-memory limit and timeout; `false`: built-in extractor only, no native parser on untrusted files), `"decryptPgp"` (default `true`:
-decrypt PGP/MIME, inline PGP and encrypted attachments with the local gpg during indexing — the message is then
-searchable like any other mail and keeps the `is:encrypted` mark; needs your secret key and a filled gpg-agent cache,
-failed attempts are retried by later syncs, `donner sync --reparse pgp` restarts the retries; `false`: index encrypted
-mail without its content), `"maxMessageBytes"` (8 MB), `"maxAttachmentBytes"` (20 MB), `"concurrency"` (4),
+memory limit and timeout; `false`: built-in extractor only, no native parser on untrusted files), `"decryptPgp"` (opt-in,
+not decided by default): decrypt PGP/MIME, inline PGP and encrypted attachments with the local gpg during indexing — the
+message is then searchable like any other mail and keeps the `is:encrypted` mark. `true` = all accounts, `false` = never,
+or a list of account names/ids (e.g. `["Firma"]`). `donner setup`, the first interactive `donner sync` and
+`donner sync --decrypt-pgp all|none|<accounts>` save the answer in the config; headless runs (background service, MCP
+auto-sync) index encrypted mail without content until then. Decryption needs your secret key and a filled gpg-agent
+cache; failed attempts are retried by later syncs (`donner sync --reparse pgp` restarts the retries).
+`donner purge decrypted [--account …]` removes plaintext that is already in the index (e.g. after turning decryption off
+for an account)), `"hideEncrypted"` (default `false`: keep encrypted mail out of default `search`/`count`/`threads`
+results — context hygiene for agents, not a security boundary; an explicit `is:encrypted` in the query shows them),
+`"maxMessageBytes"` (8 MB), `"maxAttachmentBytes"` (20 MB), `"concurrency"` (4),
 `"parseTimeoutMs"` (60 s per message), `"fullReconcileHours"` (24), `"trustedAuthservIds"` (e.g. `["mx.google.com"]`:
 only trust SPF/DKIM/DMARC results written by your own provider's servers), `"myAddresses"` (your old or
 extra addresses, in addition to the account identities and senders found in sent folders; `donner status`
@@ -317,7 +325,10 @@ resumes where it stopped.
 - PGP decryption happens only locally: gpg runs as a child process of the indexer (ciphertext in on stdin,
   plaintext out on stdout), no passphrase is ever passed or logged, and secret-key material is never read or
   exported. Messages that cannot be decrypted (missing key, empty gpg-agent cache) are indexed without content,
-  marked `is:encrypted`, and retried by later syncs.
+  marked `is:encrypted`, and retried by later syncs. Decryption is opt-in per account (`index.decryptPgp`);
+  `donner purge decrypted` removes already indexed plaintext again. `index.hideEncrypted` keeps encrypted mail
+  out of default search results — a convenience for agents' context windows, not a security boundary
+  (`is:encrypted` and `donner sql` still see the rows).
 - donner never writes to Thunderbird and never talks to the network, except to the local bridge and — only if you enable it — a local embedding model.
 - Email is untrusted input. Hidden HTML content, zero-width/bidi/"tag" characters and comments are removed before text is indexed or shown, and `trust` metadata (SPF/DKIM/DMARC from the receiving server, known contact, hidden content) accompanies every message. Tools and the skill tell agents never to follow instructions found in mail.
 

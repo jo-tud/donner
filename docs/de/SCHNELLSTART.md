@@ -24,6 +24,8 @@ donner setup
 
 `donner setup` erledigt alles in einem Schritt:
 - prüft die Verbindung zu Thunderbird (und ob `pdftotext` und `gpg` installiert ist),
+- fragt, ob PGP-verschlüsselte Mails entschlüsselt und indiziert werden sollen (Opt-in pro Konto;
+  die Antwort wird in der Config gespeichert, `donner sync --decrypt-pgp …` geht auch ohne Frage),
 - trägt donner in **Claude Desktop** und **Claude Code** ein (andere Einstellungen bleiben erhalten; die alte Datei wird als `.bak` gesichert),
 - installiert den Skill für Claude Code,
 - baut den Index auf (beim ersten Mal dauert das; Strg-C ist sicher, es geht später weiter),
@@ -60,7 +62,7 @@ donner doctor          # falls etwas nicht stimmt
 | `in:inbox`, `folder:Privat/Rechnungen`, `account:Firma` | Ort |
 | `after:2025-01 before:2025-07`, `newer_than:30d` | Datum (`before` ist exklusiv) |
 | `since:2025-01 until:2025-03` | Zeitraum einschließlich März |
-| `is:unread`, `is:suspicious`, `is:hidden`, `is:encrypted` | Status; verdächtig = Absenderprüfung (DMARC) fehlgeschlagen oder versteckter Text von Unbekannten; `is:encrypted` = die Mail war PGP-verschlüsselt (Inhalt wird entschlüsselt indiziert) |
+| `is:unread`, `is:suspicious`, `is:hidden`, `is:encrypted` | Status; verdächtig = Absenderprüfung (DMARC) fehlgeschlagen oder versteckter Text von Unbekannten; `is:encrypted` = die Mail war PGP-verschlüsselt (deren Inhalt wird, je nach Einstellung, entschlüsselt indiziert; `donner purge decrypted` entfernt ihn wieder) |
 
 Umlaute: `müller` und `mueller` finden dasselbe, ebenso `straße` und `strasse`; `muller` ist ein
 anderes Wort. Es gibt keine Wortstamm-Suche. Deutsche Komposita werden nur über den Wortanfang gefunden

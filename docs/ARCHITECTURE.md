@@ -107,8 +107,10 @@ content            — pending rows newest first, N concurrent fetches:
                      local gpg; protected headers win over the outer ones (a differing outer Subject is kept
                      as `subject_mismatch`), the message keeps `is:encrypted`/`trust.encrypted`. A failed
                      decryption (missing key, empty agent cache) leaves the content empty and is retried by
-                     the next syncs (up to 3 attempts; `donner sync --reparse pgp` starts a fresh round,
-                     `index.decryptPgp: false` turns decryption off).
+                     the next syncs (up to 3 attempts; `donner sync --reparse pgp` starts a fresh round).
+                     Decryption is opt-in per account (`index.decryptPgp`: true | false | [accounts], asked
+                     once by setup/first sync, or set via `--decrypt-pgp`); `donner purge decrypted` removes
+                     stored plaintext again, `index.hideEncrypted` keeps encrypted mail out of default results.
                      committed in batches of 50; Ctrl-C finishes the batch and exits
 threads            — union of the message's References/In-Reply-To, messages referencing it, same Message-ID;
                      when the message's own references resolve to nothing: same normalised subject within
