@@ -128,7 +128,7 @@ async function semanticIds(db, cfg, query, k) {
   const have = db.prepare("SELECT count(*) AS n FROM embeddings").get().n;
   if (!have) throw new DonnerError("NO_EMBEDDINGS", "No embeddings yet.", "Run `donner embed` first (needs a local embedding model, see `donner help embed`).");
   const [q] = await embedTexts(cfg, [prefixes(cfg.embeddings.model).query + text]);
-  const c = compileQuery(operatorsOnly(query));
+  const c = compileQuery(operatorsOnly(query), { hideEncrypted: cfg.index?.hideEncrypted });
   const where = ["e.model = ?", ...c.where];
   if (c.match) {
     // Field-restricted words (subject:x) stay hard filters in semantic mode.

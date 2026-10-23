@@ -209,6 +209,7 @@ export function createHandler({ cfg, dbPath, version = "0.0.0", log = () => {} }
         offset: clampInt(a.offset, 0, 0, 1e6),
         sort: a.sort,
         fields: a.fields,
+        filters: { hideEncrypted: cfg.index?.hideEncrypted },
       };
       let res;
       if (a.mode === "semantic" || a.mode === "hybrid") {
@@ -226,7 +227,7 @@ export function createHandler({ cfg, dbPath, version = "0.0.0", log = () => {} }
       return { notice: ops.UNTRUSTED_NOTICE, ...ops.thread(getDb(), a.id, { maxBody: clampInt(a.max_body, 2000, 100, 50000) }) };
     },
     async mail_count(a) {
-      return ops.count(getDb(), { query: a.query || "", by: a.by || null, limit: clampInt(a.limit, 100, 1, 1000) });
+      return ops.count(getDb(), { query: a.query || "", by: a.by || null, filters: { hideEncrypted: cfg.index?.hideEncrypted }, limit: clampInt(a.limit, 100, 1, 1000) });
     },
     async mail_threads(a) {
       return ops.threads(getDb(), {
@@ -236,6 +237,7 @@ export function createHandler({ cfg, dbPath, version = "0.0.0", log = () => {} }
         sort: a.sort || "last",
         limit: clampInt(a.limit, 20, 1, 100),
         offset: clampInt(a.offset, 0, 0, 1e6),
+        filters: { hideEncrypted: cfg.index?.hideEncrypted },
       });
     },
     async mail_people(a) {

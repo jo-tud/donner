@@ -9,6 +9,7 @@
 // that is bumped whenever a restart is detected.
 
 import { getMeta, setMeta, tx, stmt } from "./db.js";
+import { decryptForAccount } from "./config.js";
 import { DonnerError } from "./errors.js";
 import { matchesAny } from "./glob.js";
 import { chooseBody } from "./mime.js";
@@ -407,9 +408,10 @@ const PGP_MAX_ATTEMPTS = 3;
 async function fetchContent({ db, bridge, cfg, epoch, stats, onProgress, aborted, now }) {
   const pending = db
     .prepare(
-      `SELECT id, mid, folder_id, account_id, from_addr, tb_id, tb_epoch, size, subject, date, pgp_attempts FROM messages
-       WHERE content_state IN ('pending','error') OR (pgp_state = 'failed' AND pgp_attempts < ?)
-       ORDER BY date DESC`
+      `SELECT m.id, m.mid, m.folder_id, m.account_id, m.from_addr, m.tb_id, m.tb_epoch, m.size, m.subject, m.date, m.pgp_attempts, ac.name AS account_name
+       FROM messages m LEFT JOIN accounts ac ON ac.id = m.account_id
+       WHERE m.content_state IN ('pending','error') OR (m.pgp_state = 'failed' AND m.pgp_attempts < ?)
+       ORDER BY m.date DESC`
     )
     .all(PGP_MAX_ATTEMPTS);
   if (!pending.length) return;
@@ -464,7 +466,9 @@ async function fetchContent({ db, bridge, cfg, epoch, stats, onProgress, aborted
           inflight.set(row.id, Date.now());
           try {
             const tbId = await currentTbId(db, bridge, row, epoch);
-            result = { row, content: await loadContent(bridge, tbId, row.size, cfg, pool, cancel.signal) };
+            // PGP decryption is opt-in per account (index.decryptPgp: true | false | [accounts]).
+            const decryptPgp = decryptForAccount(cfg.index.decryptPgp, { id: row.account_id, name: row.account_name });
+            result = { row, content: await loadContent(bridge, tbId, row.size, cfg, pool, cancel.signal, decryptPgp) };
           } finally {
             inflight.delete(row.id);
           }
@@ -504,7 +508,7 @@ async function currentTbId(db, bridge, row, epoch) {
   return m.id;
 }
 
-async function loadContent(bridge, tbId, size, cfg, pool, signal) {
+async function loadContent(bridge, tbId, size, cfg, pool, signal, decryptPgp = false) {
   const ix = cfg.index;
   if (!size || size <= ix.maxMessageBytes) {
     const raw = await bridge.raw(tbId, { signal });
@@ -513,7 +517,7 @@ async function loadContent(bridge, tbId, size, cfg, pool, signal) {
       maxAttachmentBytes: ix.maxAttachmentBytes,
       maxAttachmentTextChars: ix.maxAttachmentTextChars,
       pdftotext: ix.pdftotext !== false && ix.pdftotext !== "false",
-      decryptPgp: ix.decryptPgp !== false && ix.decryptPgp !== "false",
+      decryptPgp,
       trustedAuthservIds: ix.trustedAuthservIds || [],
     });
     return { kind: "full", parsed };
@@ -523,7 +527,6 @@ async function loadContent(bridge, tbId, size, cfg, pool, signal) {
   const msg = await bridge.message(tbId, { signal });
   const { body, hiddenRemoved } = chooseBody(msg.parts?.text, msg.parts?.html);
   const pdftotext = ix.pdftotext !== false && ix.pdftotext !== "false";
-  const decryptPgp = ix.decryptPgp !== false && ix.decryptPgp !== "false";
   const attachments = [];
   // Only genuinely small attachments: every byte goes through Thunderbird as base64 JSON.
   const perAttachment = Math.min(ix.maxAttachmentBytes || Infinity, ix.largeMessageAttachmentBytes ?? 2 * 1024 * 1024);

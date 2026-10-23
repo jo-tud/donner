@@ -9,9 +9,14 @@ import assert from "node:assert/strict";
 import { findArmored, isPgpMime, isPgpAttachment, stripCryptoSuffix, decryptGpg, hasGpg, countSecretKeys, ARMOR_BEGIN } from "../../src/pgp.js";
 import { parseRawMessage } from "../../src/mime.js";
 import { extractAttachmentText } from "../../src/attachments.js";
-import { openDb, markForReparse, REPARSE_SETS } from "../../src/db.js";
+import { openDb, markForReparse, REPARSE_SETS, purgeDecrypted, countDecrypted } from "../../src/db.js";
+import { decryptForAccount, parseDecryptPgpSpec, loadConfig, saveIndexConfig } from "../../src/config.js";
+import { compileQuery } from "../../src/query.js";
 import { buildMessage, buildPdf } from "../fixtures/mime-builder.js";
 import { makeGpgHome, encrypt, buildPgpMime, buildInlinePgp } from "../fixtures/pgp.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const skip = hasGpg() ? false : "gpg is not installed";
 const me = { name: "Anna Schmidt", email: "anna@example.com" };
@@ -245,6 +250,116 @@ test("reparse set pgp: marks undecrypted messages and resets the retry budget", 
     assert.equal(row.pgp_attempts, 0, "fresh retry budget after --reparse pgp");
     assert.equal(db.prepare("SELECT content_state FROM messages WHERE id = ?").get(done).content_state, "full");
     assert.equal(db.prepare("SELECT content_state FROM messages WHERE id = ?").get(plain).content_state, "full");
+  } finally {
+    db.close();
+  }
+});
+
+// ─── Opt-in per account (index.decryptPgp) ──────────────────────────
+
+test("decryptForAccount: true/false/list, account names and ids", () => {
+  const firma = { id: "account1", name: "Firma" };
+  const privat = { id: "account2", name: "Privat" };
+  assert.equal(decryptForAccount(true, privat), true);
+  assert.equal(decryptForAccount(false, privat), false);
+  assert.equal(decryptForAccount(null, privat), false, "undecided behaves like off");
+  assert.equal(decryptForAccount([], privat), false, "an empty list decrypts nothing");
+  assert.equal(decryptForAccount(["Firma"], firma), true, "name, case-insensitive");
+  assert.equal(decryptForAccount(["firma"], firma), true);
+  assert.equal(decryptForAccount(["account1"], firma), true, "id, exact");
+  assert.equal(decryptForAccount(["Firma"], privat), false);
+  assert.equal(decryptForAccount(["Privat"], privat), true);
+});
+
+test("parseDecryptPgpSpec: all/none/account list, validated against known accounts", () => {
+  const names = ["Firma", "Privat"];
+  assert.equal(parseDecryptPgpSpec("all", names), true);
+  assert.equal(parseDecryptPgpSpec("ja", names), true);
+  assert.equal(parseDecryptPgpSpec("", names), false);
+  assert.equal(parseDecryptPgpSpec("none", names), false);
+  assert.equal(parseDecryptPgpSpec("nein", names), false);
+  assert.deepEqual(parseDecryptPgpSpec("Firma", names), ["Firma"]);
+  assert.deepEqual(parseDecryptPgpSpec("firma, Privat", names), ["firma", "Privat"]);
+  assert.equal(parseDecryptPgpSpec("Firma, Unbekannt", names), null, "unknown accounts are rejected");
+  assert.deepEqual(parseDecryptPgpSpec("WasAuchImmer", []), ["WasAuchImmer"], "without a known list, names are taken as-is");
+});
+
+test("index.decryptPgp in the config file is recognised as an explicit decision", () => {
+  const dir = mkdtempSync(join(tmpdir(), "donner-cfg-"));
+  const prev = process.env.DONNER_CONFIG_DIR;
+  process.env.DONNER_CONFIG_DIR = dir;
+  try {
+    assert.equal(loadConfig().sources.decryptPgp, "defaults", "unset by default");
+    saveIndexConfig({ decryptPgp: ["Firma"] });
+    const cfg = loadConfig();
+    assert.deepEqual(cfg.index.decryptPgp, ["Firma"]);
+    assert.equal(cfg.sources.decryptPgp, "config");
+  } finally {
+    if (prev === undefined) delete process.env.DONNER_CONFIG_DIR;
+    else process.env.DONNER_CONFIG_DIR = prev;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ─── hideEncrypted: encrypted mail out of default results ───────────
+
+test("hideEncrypted: default results exclude encrypted mail, explicit is:encrypted wins", () => {
+  const hidden = compileQuery("rechnung", { hideEncrypted: true });
+  assert.ok(hidden.where.includes("m.encrypted = 0"));
+  const shown = compileQuery("rechnung", {});
+  assert.ok(!shown.where.some((w) => w.includes("encrypted")));
+  const explicit = compileQuery("rechnung is:encrypted", { hideEncrypted: true });
+  assert.ok(!explicit.where.includes("m.encrypted = 0"), "the query asked for encrypted mail");
+  const negated = compileQuery("rechnung -is:encrypted", { hideEncrypted: true });
+  assert.ok(!negated.where.includes("m.encrypted = 0"), "already excluded explicitly");
+});
+
+// ─── Purge: remove stored plaintext of decrypted mail ───────────────
+
+test("purgeDecrypted: clears plaintext (incl. FTS), keeps headers and is:encrypted", () => {
+  const db = openDb(":memory:");
+  try {
+    const ins = db.prepare("INSERT INTO messages(mid, folder_id, account_id, subject, body, quoted, snippet, att_text, content_state, encrypted, pgp_state) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
+    const a = ins.run("a@b", "f", "account1", "Vertrag", "Geheimnis XYZ", "Zitat ABC", "Geheimnis…", "rechnung.pdf\nBetrerag 99", "full", 1, "decrypted").lastInsertRowid;
+    const b = ins.run("c@d", "f", "account2", "Hallo", "Klartext", "", "Klartext", "", "full", 1, "decrypted").lastInsertRowid;
+    const c = ins.run("e@f", "f", "account1", "Normal", "Unverschluesselt", "", "", "", "full", 0, null).lastInsertRowid;
+    db.prepare("INSERT INTO attachments(message_id, idx, filename, content_type, size, text, text_state) VALUES(?,?,?,?,?,?,?)").run(a, 1, "rechnung.pdf", "application/pdf", 10, "Betreag 99 EUR", "extracted");
+
+    assert.equal(countDecrypted(db).messages, 2);
+    assert.equal(countDecrypted(db, { accountIds: ["account1"] }).messages, 1);
+
+    // The plaintext is findable before the purge (and invisible afterwards) in the FTS index too.
+    assert.equal(db.prepare("SELECT count(*) n FROM messages_fts WHERE messages_fts MATCH 'geheimnis'").get().n, 1);
+
+    const res = purgeDecrypted(db, { accountIds: ["account1"] });
+    assert.equal(res.messages, 1);
+    assert.equal(res.attachments, 1);
+    const row = db.prepare("SELECT * FROM messages WHERE id = ?").get(a);
+    assert.equal(row.body, "");
+    assert.equal(row.quoted, "");
+    assert.equal(row.snippet, "");
+    assert.equal(row.att_text, "");
+    assert.equal(row.pgp_state, null, "so --reparse pgp can decrypt again later");
+    assert.equal(row.subject, "Vertrag", "headers stay as indexed");
+    assert.equal(row.encrypted, 1, "still marked is:encrypted");
+    assert.equal(db.prepare("SELECT text FROM attachments WHERE message_id = ?").get(a).text, null);
+    assert.equal(db.prepare("SELECT count(*) n FROM messages_fts WHERE messages_fts MATCH 'geheimnis'").get().n, 0, "FTS index cleared too");
+    assert.equal(db.prepare("SELECT body FROM messages WHERE id = ?").get(b).body, "Klartext", "other account untouched");
+    assert.equal(db.prepare("SELECT body FROM messages WHERE id = ?").get(c).body, "Unverschluesselt", "unencrypted mail untouched");
+    assert.equal(countDecrypted(db).messages, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("purgeDecrypted: removes calendar data that came from inside the encryption", () => {
+  const db = openDb(":memory:");
+  try {
+    const id = db.prepare("INSERT INTO messages(mid, folder_id, body, content_state, encrypted, pgp_state) VALUES(?,?,?,?,?,?)").run("a@b", "f", "Termin", "full", 1, "decrypted").lastInsertRowid;
+    db.prepare("INSERT INTO events(message_id, start, summary) VALUES(?,?,?)").run(id, Date.now(), "Geheimer Termin");
+    const res = purgeDecrypted(db, {});
+    assert.equal(res.events, 1);
+    assert.equal(db.prepare("SELECT count(*) n FROM events").get().n, 0);
   } finally {
     db.close();
   }

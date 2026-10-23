@@ -258,6 +258,39 @@ export function markForReparse(db, sets) {
   );
 }
 
+/**
+ * Count what `purgeDecrypted` would remove: messages with decrypted plaintext and the
+ * attachment texts extracted from them.
+ */
+export function countDecrypted(db, { accountIds = null } = {}) {
+  const params = accountIds?.length ? accountIds : [];
+  const filter = params.length ? ` AND account_id IN (${params.map(() => "?").join(", ")})` : "";
+  const where = `encrypted = 1 AND pgp_state = 'decrypted'${filter}`;
+  return {
+    messages: db.prepare(`SELECT count(*) AS n FROM messages WHERE ${where}`).get(...params).n,
+    attachments: db.prepare(`SELECT count(*) AS n FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE ${where})`).get(...params).n,
+  };
+}
+
+/**
+ * Remove the stored plaintext of decrypted PGP messages (body, quotes, snippet, attachment
+ * text, calendar data from inside the encryption). Headers (subject, participants) stay as
+ * indexed. The pgp state is cleared, so `donner sync --reparse pgp` can decrypt the messages
+ * again later; the messages remain in the index as headers-only, marked `is:encrypted`.
+ */
+export function purgeDecrypted(db, { accountIds = null } = {}) {
+  const params = accountIds?.length ? accountIds : [];
+  const filter = params.length ? ` AND account_id IN (${params.map(() => "?").join(", ")})` : "";
+  const sel = `SELECT id FROM messages WHERE encrypted = 1 AND pgp_state = 'decrypted'${filter}`;
+  const attachments = db.prepare(`UPDATE attachments SET text = NULL, text_state = 'skipped' WHERE message_id IN (${sel})`).run(...params).changes;
+  const events = db.prepare(`DELETE FROM events WHERE message_id IN (${sel})`).run(...params).changes;
+  // body/quoted/att_text updates keep the FTS index in sync through the triggers.
+  const messages = db
+    .prepare(`UPDATE messages SET body = '', quoted = '', snippet = '', att_text = '', content_error = NULL, pgp_state = NULL, pgp_attempts = 0 WHERE encrypted = 1 AND pgp_state = 'decrypted'${filter}`)
+    .run(...params).changes;
+  return { messages, attachments, events };
+}
+
 /** SQL functions the schema needs (FTS triggers) or migrations use. */
 function registerFunctions(db) {
   db.function("donner_de", { deterministic: true }, (s) => (typeof s === "string" ? germanFold(s) : s));

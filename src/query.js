@@ -563,6 +563,13 @@ function isMatchable(c) {
   return isWord(c) || (c.k === "or" && c.items.every(isWord));
 }
 
+/** Does the query talk about encrypted mail at all (is:encrypted / -is:encrypted)? */
+function mentionsEncrypted(node) {
+  if (!node) return false;
+  if (node.k === "term") return node.field === "is" && String(node.value).toLowerCase() === "encrypted";
+  return mentionsEncrypted(node.item) || (node.items || []).some(mentionsEncrypted);
+}
+
 export function compileQuery(q, extra = {}, now = Date.now()) {
   const ast = prune(parse(q));
   const where = [];
@@ -599,6 +606,10 @@ export function compileQuery(q, extra = {}, now = Date.now()) {
   if (extra.flagged) add("is", "flagged");
   if (extra.hasAttachment) add("has", "attachment");
   if (extra.thread !== undefined && extra.thread !== null) add("thread", extra.thread);
+
+  // index.hideEncrypted: encrypted mail stays out of default results (context hygiene for
+  // agents, not a security boundary). An explicit is:encrypted in the query always wins.
+  if (extra.hideEncrypted && !mentionsEncrypted(ast)) where.push("m.encrypted = 0");
 
   return { match: match.length ? match.join(" AND ") : null, where, params, hasText: match.length > 0 };
 }

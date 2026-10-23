@@ -48,11 +48,18 @@ export const DEFAULTS = Object.freeze({
     // sandboxed (private temp file, memory limit, timeout); set false to avoid native parsing.
     pdftotext: "auto",
     // Decrypt PGP-encrypted mail (PGP/MIME, inline PGP, encrypted attachments) with the local
-    // gpg during indexing. Decryption needs the secret key in the keyring and the gpg-agent
-    // cache (default-cache-ttl); failures leave the message indexed without content and are
-    // retried by later syncs (`donner sync --reparse pgp` for a fresh round).
-    // false = index encrypted mail without its content (still marked is:encrypted).
-    decryptPgp: true,
+    // gpg during indexing. Opt-in, per account: true = all accounts, false = never (the mail is
+    // only marked is:encrypted), or a list of account names/ids to decrypt for.
+    // null (default) = not decided yet: `donner setup` and the first `donner sync` ask once and
+    // store the answer here; headless runs (service, MCP auto-sync) index encrypted mail without
+    // content until it is set. Decryption needs the secret key and a filled gpg-agent cache;
+    // failures leave the message without content and are retried by later syncs
+    // (`donner sync --reparse pgp` for a fresh round).
+    decryptPgp: null,
+    // Keep encrypted mail out of default search/count/threads results (context hygiene for
+    // agents, NOT a security boundary — `is:encrypted` and `donner sql` still see it).
+    // An explicit is:encrypted (or -is:encrypted) in the query always wins.
+    hideEncrypted: false,
     // Authentication-Results are only trusted from these receiving servers (authserv-id,
     // e.g. "mx.google.com"). Empty = trust the topmost transit header.
     trustedAuthservIds: [],
@@ -176,6 +183,12 @@ export function loadConfig(env = process.env) {
   cfg = deepMerge(cfg, fileConfig);
   if (fileConfig.bridge) sources.bridge = cfgPath;
 
+  const dp = cfg.index.decryptPgp;
+  if (dp !== null && dp !== true && dp !== false && !(Array.isArray(dp) && dp.every((x) => typeof x === "string"))) {
+    throw Object.assign(new Error("Invalid index.decryptPgp value."), { code: "CONFIG_ERROR" });
+  }
+  sources.decryptPgp = fileConfig.index && fileConfig.index.decryptPgp !== undefined && fileConfig.index.decryptPgp !== null ? "config" : "defaults";
+
   const tbEnv = {
     host: env.TB_BRIDGE_HOST || undefined,
     port: intEnv(env.TB_BRIDGE_PORT, "TB_BRIDGE_PORT"),
@@ -247,6 +260,54 @@ export function redactConfig(cfg) {
   const out = structuredClone(cfg);
   if (out.bridge?.authToken) out.bridge.authToken = "***";
   return out;
+}
+
+/** Merge values into "index" of the user's config file (kept private, 0600). */
+export function saveIndexConfig(patch, env = process.env) {
+  const p = configPath(env);
+  ensurePrivateDir(dirname(p));
+  const cur = readJson(p) || {};
+  cur.index = { ...(cur.index || {}), ...patch };
+  writeFileSync(p, JSON.stringify(cur, null, 2) + "\n", { mode: 0o600 });
+  return cur;
+}
+
+/**
+ * Is PGP decryption enabled for one account?
+ * `index.decryptPgp`: true (all), false/null (none), or a list of account names (case-insensitive)
+ * or ids (exact) — same matching as `index.accounts`.
+ * @param {boolean|string[]|null} decryptPgp
+ * @param {{id?: string, name?: string}|string} account
+ */
+export function decryptForAccount(decryptPgp, account = {}) {
+  if (decryptPgp === true) return true;
+  if (!Array.isArray(decryptPgp)) return false;
+  const id = typeof account === "string" ? account : String(account.id ?? "");
+  const name = typeof account === "string" ? account : String(account.name ?? "");
+  return decryptPgp.some((a) => {
+    const s = String(a ?? "").trim();
+    return !!s && (s === id || (!!name && s.toLowerCase() === name.toLowerCase()));
+  });
+}
+
+/**
+ * Parse an answer for "decrypt encrypted mail?": "all", "none" (or empty) or a comma-separated
+ * list of account names/ids.
+ * @returns {boolean|string[]|null} null = not a valid answer (when accountNames is given, the
+ *   names are validated against it)
+ */
+export function parseDecryptPgpSpec(value, accountNames = []) {
+  const s = String(value ?? "").trim();
+  if (!s || /^(n|no|nein|none|keine|off|never)$/i.test(s)) return false;
+  if (/^(a|all|ja|yes|j|on|alle)$/i.test(s)) return true;
+  const list = [...new Set(s.split(",").map((x) => x.trim()).filter(Boolean))];
+  if (!list.length) return null;
+  if (accountNames.length) {
+    const known = accountNames.map((n) => String(n ?? "").toLowerCase());
+    const unknown = list.filter((x) => !known.includes(x.toLowerCase()));
+    if (unknown.length) return null;
+  }
+  return list;
 }
 
 export function isLoopbackHost(host) {
