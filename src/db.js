@@ -10,7 +10,7 @@ import { germanFold, fold } from "./text.js";
 import { authVerdict, refreshIdentities, refreshContacts } from "./identity.js";
 import { refreshEvents } from "./calendar.js";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 // Column weights for bm25(): subject, people, body, quoted, att_text.
 export const FTS_WEIGHTS = [6.0, 3.0, 1.0, 0.15, 0.8];
@@ -218,6 +218,15 @@ CREATE TRIGGER messages_fts_au AFTER UPDATE OF subject, people, body, quoted, at
 END;
 `;
 
+// Schema 5: PGP decryption — messages that were encrypted (PGP/MIME, inline PGP) are marked,
+// with the state of the decryption and how often it failed (retry damping).
+const SCHEMA_V5 = `
+ALTER TABLE messages ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0;      -- 1 = PGP/MIME or inline PGP
+ALTER TABLE messages ADD COLUMN pgp_state TEXT;                            -- decrypted | failed | NULL (not encrypted, or not attempted)
+ALTER TABLE messages ADD COLUMN pgp_attempts INTEGER NOT NULL DEFAULT 0;   -- failed decryption attempts (retried by later syncs)
+ALTER TABLE messages ADD COLUMN subject_mismatch INTEGER NOT NULL DEFAULT 0; -- outer Subject differed from the protected one
+`;
+
 // Messages whose stored content was produced by extraction code that has since improved.
 // They are fetched again by the next sync (old content stays searchable until then).
 export const REPARSE_SETS = {
@@ -229,6 +238,7 @@ export const REPARSE_SETS = {
   headers: "(m.subject LIKE '%\uFFFD%' OR m.subject LIKE '%=?%?=%' OR m.from_name LIKE '%\uFFFD%' OR m.from_name LIKE '%=?%?=%')",
   auth: "(m.auth_json IS NOT NULL AND (m.auth_json NOT LIKE '%\"dmarc\"%' OR m.auth_json NOT LIKE '%\"spf\"%'))",
   replies: "(coalesce(m.body, '') = '' AND coalesce(m.quoted, '') != '')",
+  pgp: "(m.encrypted = 1 AND coalesce(m.pgp_state, '') != 'decrypted')",
   large: "m.content_state = 'parts'",
   all: "1",
 };
@@ -240,8 +250,11 @@ export function markForReparse(db, sets) {
     return REPARSE_SETS[k];
   });
   if (!conds.length) return 0;
+  // "pgp" is a fresh start for the retry budget: with the agent cache now filled, the next
+  // syncs try to decrypt again.
+  const resetAttempts = sets.includes("pgp") ? ", pgp_attempts = 0" : "";
   return Number(
-    db.prepare(`UPDATE messages AS m SET content_state = 'pending' WHERE m.content_state IN ('full','parts') AND (${conds.join(" OR ")})`).run().changes
+    db.prepare(`UPDATE messages AS m SET content_state = 'pending'${resetAttempts} WHERE m.content_state IN ('full','parts') AND (${conds.join(" OR ")})`).run().changes
   );
 }
 
@@ -354,8 +367,10 @@ function migrate(db) {
         CREATE INDEX IF NOT EXISTS events_uid ON events(uid);
       `);
     }
+    if (v < 5) db.exec(SCHEMA_V5);
     if (v >= 1 && v < 2) upgradeToV2(db);
     if (v >= 1 && v < 4) upgradeToV4(db, v);
+    if (v >= 1 && v < 5) upgradeToV5(db);
     setMeta(db, "schema_version", String(SCHEMA_VERSION));
     db.exec("COMMIT");
   } catch (err) {
@@ -373,6 +388,13 @@ function upgradeToV4(db, from) {
   }
   refreshEvents(db);
   setMeta(db, "rethread", "1"); // reply chains whose first message lost its parent
+}
+
+/** Data changes for indexes created before schema 5 (PGP decryption). */
+function upgradeToV5(db) {
+  // Encrypted messages used to be indexed with an empty body and (protected headers) an empty
+  // subject. Read them again on the next sync; with a working gpg they come back decrypted.
+  markForReparse(db, ["empty"]);
 }
 
 /** Data changes for indexes created by donner 0.1.x. */

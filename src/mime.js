@@ -4,6 +4,7 @@ import PostalMime from "postal-mime";
 import { htmlToText } from "./html.js";
 import { sanitizeText, cleanMid, parseMidList } from "./text.js";
 import { extractAttachmentText } from "./attachments.js";
+import { isPgpMime, findArmored, decryptGpg } from "./pgp.js";
 
 function flattenAddresses(list) {
   const out = [];
@@ -257,29 +258,95 @@ export function decodeLooseWords(s) {
 
 /**
  * @param {Buffer} buf raw message
- * @param {{attachments?: boolean, maxAttachmentBytes?: number, maxAttachmentTextChars?: number, depth?: number}} opts
+ * @param {{attachments?: boolean, maxAttachmentBytes?: number, maxAttachmentTextChars?: number, decryptPgp?: boolean, pgpTimeoutMs?: number, depth?: number}} opts
  */
 export async function parseRawMessage(buf, opts = {}) {
-  const { attachments: withAttachments = true, maxAttachmentBytes, maxAttachmentTextChars, pdftotext = false, trustedAuthservIds = [], depth = 0 } = opts;
+  const { attachments: withAttachments = true, maxAttachmentBytes, maxAttachmentTextChars, pdftotext = false, trustedAuthservIds = [], decryptPgp = false, pgpTimeoutMs, depth = 0 } = opts;
   const email = await PostalMime.parse(fixHeaderBytes(buf), {
     attachmentEncoding: "arraybuffer",
     maxNestingDepth: 50,
     maxRfc822NestingDepth: 3,
   });
-  const from = flattenAddresses(email.from ? [email.from] : [])[0] || { name: "", addr: "" };
-  const { body, hiddenRemoved } = chooseBody(email.text, email.html);
+
+  // PGP/MIME (RFC 3156/8551): the outer headers and body are placeholders; the real
+  // message lives in the encrypted part and carries its own protected headers.
+  // Inline PGP: an armored message inside a text body. Either way the message counts as
+  // encrypted (`is:encrypted`) — with index.decryptPgp the plaintext is indexed as well.
+  const pgpMime = isPgpMime(header(email, "content-type"));
+  const containerParts = new Set();
+  let inner = null;
+  let inlinePgp = false;
+  let pgpState;
+  let pgpError;
+  if (pgpMime) {
+    const parts = (email.attachments || []).filter((a) => a.mimeType?.toLowerCase() !== "application/pgp-encrypted");
+    for (const a of email.attachments || []) if (!parts.includes(a)) containerParts.add(a);
+    const cipher = parts.find((a) => findArmored(partText(a))) || parts[0];
+    if (cipher) containerParts.add(cipher);
+    if (decryptPgp && cipher) {
+      const content = partBytes(cipher);
+      const r = await decryptGpg(content, { timeoutMs: pgpTimeoutMs });
+      if (r.ok) {
+        pgpState = "decrypted";
+        try {
+          inner = await PostalMime.parse(fixHeaderBytes(r.buf), { attachmentEncoding: "arraybuffer", maxNestingDepth: 50, maxRfc822NestingDepth: 3 });
+        } catch {
+          pgpState = "failed";
+          pgpError = "the decrypted part is not a valid MIME message";
+        }
+      } else {
+        pgpState = "failed";
+        pgpError = r.error;
+      }
+    } else if (decryptPgp) {
+      pgpState = "failed";
+      pgpError = "the encrypted message has no data part";
+    }
+  } else {
+    // Inline PGP: decrypt the armor block in place; the block itself is never indexed.
+    for (const part of ["text", "html"]) {
+      const armor = findArmored(email[part]);
+      if (!armor) continue;
+      inlinePgp = true;
+      email[part] = email[part].replace(armor, "");
+      if (!decryptPgp) continue;
+      const r = await decryptGpg(armor, { timeoutMs: pgpTimeoutMs });
+      if (r.ok) {
+        pgpState = "decrypted";
+        email[part] += `\n${r.buf.toString("utf8")}`;
+        // A divergent HTML alternative would hide the plaintext (chooseBody prefers HTML);
+        // Thunderbird shows the decrypted text here too.
+        if (part === "text") email.html = "";
+      } else {
+        pgpState = "failed";
+        pgpError = r.error;
+      }
+    }
+  }
+  const encrypted = pgpMime || inlinePgp;
+
+  // Protected headers win over the outer ones (what Thunderbird shows); a differing outer
+  // Subject is kept as a signal because senders sometimes put a placeholder there.
+  const subjectOuter = sanitizeText(decodeLooseWords(email.subject || "")).text;
+  const subjectInner = inner ? sanitizeText(decodeLooseWords(inner.subject || "")).text : "";
+  const subjectMismatch = !!(subjectInner && subjectOuter && subjectInner !== subjectOuter);
+
+  const from = flattenAddresses(inner?.from ? [inner.from] : email.from ? [email.from] : [])[0] || { name: "", addr: "" };
+  const { body, hiddenRemoved } = chooseBody(inner ? inner.text : email.text, inner ? inner.html : email.html);
 
   const refs = parseMidList(email.references);
   const inReplyTo = parseMidList(email.inReplyTo);
-  const listId = header(email, "list-id");
+  const listId = header(email, "list-id") || (inner ? header(inner, "list-id") : undefined);
 
   const atts = [];
   let idx = 0;
-  for (const a of email.attachments || []) {
+  const outerAtts = (email.attachments || []).filter((a) => !containerParts.has(a));
+  const allAtts = inner ? [...(inner.attachments || []), ...outerAtts] : outerAtts;
+  for (const a of allAtts) {
     // Inline images referenced from the HTML are decoration, not attachments.
     if (a.related && /^image\//.test(a.mimeType)) continue;
     idx++;
-    const content = Buffer.from(a.content instanceof ArrayBuffer ? new Uint8Array(a.content) : a.content || []);
+    const content = partBytes(a);
     const entry = {
       idx,
       filename: sanitizeText(decodeLooseWords(a.filename || "")).text || null,
@@ -295,6 +362,8 @@ export async function parseRawMessage(buf, opts = {}) {
           maxChars: maxAttachmentTextChars,
           maxBytes: maxAttachmentBytes,
           pdftotext,
+          decryptPgp,
+          pgpTimeoutMs,
           parseEml: depth < 1 ? (b) => emlToText(b, { ...opts, depth: depth + 1 }) : undefined,
         }
       );
@@ -307,13 +376,13 @@ export async function parseRawMessage(buf, opts = {}) {
 
   return {
     mid: cleanMid(email.messageId),
-    subject: sanitizeText(decodeLooseWords(email.subject || "")).text,
+    subject: subjectInner || subjectOuter,
     date: email.date && !Number.isNaN(Date.parse(email.date)) ? Date.parse(email.date) : null,
     from,
-    to: flattenAddresses(email.to),
-    cc: flattenAddresses(email.cc),
+    to: flattenAddresses(inner?.to?.length ? inner.to : email.to),
+    cc: flattenAddresses(inner?.cc?.length ? inner.cc : email.cc),
     bcc: flattenAddresses(email.bcc),
-    replyTo: flattenAddresses(email.replyTo),
+    replyTo: flattenAddresses(inner?.replyTo?.length ? inner.replyTo : email.replyTo),
     inReplyTo,
     references: refs,
     listId: listId ? cleanMid(listId.slice(0, 500).match(/<([^<>]+)>/)?.[1] || listId.slice(0, 500)) : null,
@@ -321,7 +390,19 @@ export async function parseRawMessage(buf, opts = {}) {
     body,
     hiddenRemoved,
     attachments: atts,
+    encrypted,
+    pgpState,
+    pgpError,
+    subjectMismatch,
   };
+}
+
+function partBytes(a) {
+  return Buffer.from(a.content instanceof ArrayBuffer ? new Uint8Array(a.content) : a.content || []);
+}
+
+function partText(a) {
+  return partBytes(a).toString("utf8");
 }
 
 async function emlToText(buf, opts) {

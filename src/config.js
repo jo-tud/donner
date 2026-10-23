@@ -47,6 +47,12 @@ export const DEFAULTS = Object.freeze({
     // LibreOffice/FOP/ReportLab PDFs), true = same, false = built-in extractor only. It runs
     // sandboxed (private temp file, memory limit, timeout); set false to avoid native parsing.
     pdftotext: "auto",
+    // Decrypt PGP-encrypted mail (PGP/MIME, inline PGP, encrypted attachments) with the local
+    // gpg during indexing. Decryption needs the secret key in the keyring and the gpg-agent
+    // cache (default-cache-ttl); failures leave the message indexed without content and are
+    // retried by later syncs (`donner sync --reparse pgp` for a fresh round).
+    // false = index encrypted mail without its content (still marked is:encrypted).
+    decryptPgp: true,
     // Authentication-Results are only trusted from these receiving servers (authserv-id,
     // e.g. "mx.google.com"). Empty = trust the topmost transit header.
     trustedAuthservIds: [],
