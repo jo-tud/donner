@@ -45,7 +45,7 @@ function currentEpoch(db) {
 
 export const SEARCH_FIELDS = [
   "id", "date", "from", "to", "cc", "subject", "folder", "account", "snippet", "thread", "attachments",
-  "unread", "flagged", "tags", "mid", "tb_id", "score", "size", "list", "copies", "warning", "event",
+  "unread", "flagged", "tags", "mid", "tb_id", "score", "size", "list", "copies", "warning", "event", "encrypted",
 ];
 export const DEFAULT_SEARCH_FIELDS = ["id", "date", "from", "subject", "folder", "snippet", "thread", "attachments", "unread", "flagged", "copies", "warning", "event"];
 
@@ -70,11 +70,14 @@ export function eventInfo(e) {
  * failed sender authentication (DMARC decides), or hidden content in a message that is not
  * from a mailing list, not DMARC-authenticated and not from someone the user writes to.
  * (Preheaders of shop and payment mails are hidden text too; they pass DMARC.)
+ * A message that was encrypted and could not be decrypted carries no searchable content,
+ * so that is flagged here as well.
  */
 export function warningFor(row) {
   const w = [];
   if (row.auth_verdict === "fail") w.push("sender authentication failed");
   if (row.hidden_removed && !row.list_id && row.auth_verdict !== "pass" && !row.known_sender) w.push("hidden content removed");
+  if (row.pgp_state === "failed") w.push("encrypted message, not decrypted");
   return w.length ? w.join("; ") : undefined;
 }
 
@@ -102,6 +105,7 @@ function summaryRow(row, fields, epoch, explicit = false) {
     copies: row.copies > 1 ? row.copies : explicit ? 1 : undefined,
     warning: warningFor(row),
     event: row.event ? eventInfo(row.event) : undefined,
+    encrypted: row.encrypted ? true : undefined,
   };
   const out = {};
   for (const f of fields) {
@@ -121,7 +125,8 @@ function summaryRow(row, fields, epoch, explicit = false) {
 
 const BASE_COLS = `m.id, m.date, m.from_name, m.from_addr, m.subject, m.snippet, m.thread_id, m.attachment_count,
   m.read, m.flagged, m.tags, m.folder_id, m.account_id, m.mid, m.tb_id, m.tb_epoch, m.size, m.to_json, m.cc_json,
-  m.list_id, m.content_state, m.auth_json, m.auth_verdict, m.hidden_removed, f.path AS folder_path, f.name AS folder_name, ac.name AS account_name,
+  m.list_id, m.content_state, m.auth_json, m.auth_verdict, m.hidden_removed, m.encrypted, m.pgp_state, m.subject_mismatch,
+  f.path AS folder_path, f.name AS folder_name, ac.name AS account_name,
   (coalesce(m.from_addr, '') IN (SELECT addr FROM contacts) OR coalesce(m.from_addr, '') IN (SELECT addr FROM identities)) AS known_sender`;
 
 // ─── search ─────────────────────────────────────────────────────────
@@ -400,6 +405,14 @@ export function trustInfo(db, row) {
   if (row.auth_verdict) trust.authenticated = row.auth_verdict === "pass";
   if (row.auth_verdict === "fail") trust.warning = "sender authentication failed";
   if (row.hidden_removed) trust.hidden_content_removed = true;
+  if (row.encrypted) {
+    // The message was encrypted on the way (PGP/MIME or inline PGP); the indexed text is the
+    // decrypted plaintext when index.decryptPgp found a key.
+    trust.encrypted = true;
+    if (row.pgp_state === "decrypted") trust.decrypted = true;
+    else if (row.pgp_state === "failed") trust.decrypt_error = row.content_error || "decryption failed";
+  }
+  if (row.subject_mismatch) trust.subject_mismatch = true;
   if (row.junk) trust.junk = true;
   return trust;
 }
@@ -446,7 +459,7 @@ export function show(db, id, { maxBody = 20000, quoted = false, attachments = fa
   }
   const events = db.prepare("SELECT start, end, summary, location, organizer, method, status, rrule, active, next_start FROM events WHERE message_id = ? ORDER BY start").all(row.id);
   if (events.length) out.events = events.map(eventInfo);
-  if (row.content_state === "error") out.content_error = row.content_error;
+  if (row.content_error) out.content_error = row.content_error;
   if (row.content_state === "pending" || row.content_state === "headers") out.note = "Body not indexed yet; run `donner sync`.";
   for (const k of Object.keys(out)) if (out[k] === undefined || (Array.isArray(out[k]) && !out[k].length) || out[k] === false) delete out[k];
   return out;

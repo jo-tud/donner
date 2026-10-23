@@ -17,6 +17,7 @@ import { SCHEMA_DOC } from "./schema-doc.js";
 import { printJson, printError, makeStyle, wantColor, termWidth, fit, safeTerm, shortDate, table } from "./output.js";
 import { parseRelative, QUERY_HELP } from "./query.js";
 import { hasPdftotext } from "./pdf.js";
+import { hasGpg, countSecretKeys } from "./pgp.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SEARCH_FIELDS_TEXT = ops.SEARCH_FIELDS.join(",");
@@ -100,8 +101,8 @@ with Ctrl-C: progress is committed in batches and the next run continues.
   --full          list every folder (catches flag/tag changes in unchanged folders)
   --no-bodies     index headers only (fast; bodies can be added by a later sync)
   --folder <x>    only this folder (id like "account1://INBOX" or glob "Firma/Projekte/**")
-  --reparse <set> read messages again from Thunderbird, e.g. after installing pdftotext:
-                  pdf, attachments, empty, hidden, calendar, headers, auth, large, all
+  --reparse <set> read messages again from Thunderbird, e.g. after installing pdftotext or gpg:
+                  pdf, attachments, pgp, empty, hidden, calendar, headers, auth, large, all
   --quiet         no progress output`,
   options: { full: { type: "boolean" }, "no-bodies": { type: "boolean" }, folder: { type: "string", multiple: true }, reparse: { type: "string" }, quiet: { type: "boolean", short: "q" } },
   async run(ctx, v) {
@@ -794,8 +795,11 @@ function renderMessage(ctx, m) {
   const warn = [];
   if (t.warning) warn.push(t.warning);
   if (t.hidden_content_removed) warn.push("hidden content was removed from this mail");
+  if (t.decrypt_error) warn.push(`encrypted message, not decrypted (${t.decrypt_error})`);
+  if (t.subject_mismatch) warn.push("the subject in the encrypted part differs from the outer subject");
   if (t.junk) warn.push("marked as junk");
   if (warn.length) head.push(st.yellow(`⚠ ${warn.join("; ")}`));
+  if (t.encrypted && !t.decrypt_error) head.push(st.dim(`🔒 PGP-encrypted${t.decrypted ? ", decrypted for the index" : ""}`));
   if (m.attachments?.length) head.push(`${st.dim("Attach:")}  ${m.attachments.map((a) => `[${a.idx}] ${safeTerm(a.filename || "unnamed")}`).join("  ")}`);
   let body = safeTerm(m.body || st.dim("(no text)"));
   if (m.body_truncated) body += "\n" + st.dim(`… truncated (${m.body_truncated.total} chars; use --max-body)`);
@@ -918,6 +922,17 @@ async function doctor(ctx) {
     if (!want) add("pdf text", "ok", "built-in extractor (index.pdftotext: false)");
     else if (hasPdftotext()) add("pdf text", "ok", "pdftotext (poppler), built-in extractor as fallback");
     else add("pdf text", "warn", "built-in extractor only (pdftotext not installed)", "Install poppler-utils for much better PDF coverage, then run `donner sync --reparse pdf`.");
+  }
+  {
+    const want = ctx.cfg.index.decryptPgp !== false && ctx.cfg.index.decryptPgp !== "false";
+    if (!want) add("pgp decrypt", "ok", "disabled (index.decryptPgp: false)");
+    else if (!hasGpg()) {
+      const how = process.platform === "darwin" ? "brew install gnupg" : process.platform === "win32" ? "install Gpg4win (or GnuPG) and put gpg on PATH" : "sudo apt install gnupg   (Fedora: sudo dnf install gnupg2)";
+      add("pgp decrypt", "warn", "gpg not installed — encrypted mail is indexed without its content", `${how}; afterwards: donner sync --reparse pgp`);
+    }
+    else if (!countSecretKeys()) add("pgp decrypt", "warn", "gpg found, but the keyring has no secret key — encrypted mail cannot be decrypted",
+      "Import your key (gpg --import …), then run `donner sync --reparse pgp`.");
+    else add("pgp decrypt", "ok", "gpg found — encrypted mail is decrypted for the index");
   }
   if (ctx.cfg.embeddings?.enabled) {
     try {

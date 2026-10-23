@@ -21,6 +21,9 @@ messages      one row per message and folder (same Message-ID in two folders = t
   auth_json        {"spf","dkim","dmarc"} from the receiving server, may be NULL
   auth_verdict     pass (DMARC pass) | fail (DMARC fail, or no DMARC and nothing passed) | NULL
   hidden_removed   1 = hidden HTML content was stripped (possible prompt injection)
+  encrypted        1 = the message was encrypted (PGP/MIME or inline PGP)
+  pgp_state        decrypted (plaintext indexed) | failed (see content_error) | NULL
+  subject_mismatch 1 = the outer Subject differed from the protected Subject inside the encryption
   content_state    full | parts | headers | pending | error
 
 addresses     one row per participant: message_id, role (from|to|cc|bcc|reply-to), name, addr (lowercase)

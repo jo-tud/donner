@@ -8,7 +8,7 @@ import { TOOLS } from "../../src/mcp.js";
 import { ROOT } from "../helpers.js";
 
 const CANONICAL = ["from:", "to:", "cc:", "bcc:", "with:", "subject:", "body:", "filename:", "has:", "in:", "folder:", "account:", "is:", "after:", "before:", "newer_than:", "older_than:", "event_after:", "event_before:", "tag:", "list:", "thread:", "larger:", "smaller:", "id:", "mid:"];
-const VALUES = ["is:suspicious", "is:hidden", "is:unread", "has:invite", "has:pdf", "has:xlsx", "has:ics", "from:me"];
+const VALUES = ["is:suspicious", "is:hidden", "is:unread", "is:encrypted", "has:invite", "has:pdf", "has:xlsx", "has:ics", "from:me"];
 
 test("every operator is documented in help, MCP, README and SKILL.md", () => {
   const readme = readFileSync(join(ROOT, "README.md"), "utf8");
