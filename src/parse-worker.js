@@ -9,7 +9,7 @@ parentPort.on("message", async ({ id, raw, opts }) => {
     const buf = Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
     // One attachment fetched on its own (from a message too large to download whole).
     const result = opts?.attachment
-      ? await extractAttachmentText({ filename: opts.attachment.filename, mimeType: opts.attachment.contentType, content: buf }, { maxChars: opts.maxChars, maxBytes: opts.maxBytes, pdftotext: opts.pdftotext })
+      ? await extractAttachmentText({ filename: opts.attachment.filename, mimeType: opts.attachment.contentType, content: buf }, { maxChars: opts.maxChars, maxBytes: opts.maxBytes, pdftotext: opts.pdftotext, decryptPgp: opts.decryptPgp, pgpTimeoutMs: opts.pgpTimeoutMs })
       : await parseRawMessage(buf, opts);
     parentPort.postMessage({ id, result });
   } catch (err) {

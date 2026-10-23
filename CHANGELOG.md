@@ -6,6 +6,37 @@ The JSON output shape, error codes and MCP tool names are the public API.
 
 ## [Unreleased]
 
+### Added
+- PGP-encrypted mail can now be decrypted locally during indexing (PGP/MIME with protected
+  headers — the inner Subject/From/To win, a differing outer Subject is kept as a
+  `subject_mismatch` signal —, inline PGP and encrypted attachments (`.gpg`/`.pgp`/`.asc`)).
+  gpg runs only as a local child process (stdin/stdout) — no passphrase handling, no key export,
+  no keyserver lookups or key imports even when the user's gpg.conf enables them. Signed mail
+  from senders whose key is not in the keyring is decrypted as well.
+- Decryption is opt-in per account (`index.decryptPgp`: `true` | `false` | a list of accounts,
+  e.g. `["Work"]`): `donner setup` and the first interactive `donner sync` ask once and remember
+  the answer; `donner sync --decrypt-pgp all|none|<accounts>` decides non-interactively.
+  Background syncs (service, MCP auto-sync) never prompt and keep encrypted mail without content
+  until the decision is made.
+- `is:encrypted`, `trust.encrypted`/`trust.decrypted`/`trust.decrypt_error`,
+  `trust.subject_mismatch` and the `encrypted` search field: the "was encrypted" signal survives,
+  even though the plaintext lives in the index.
+- `donner purge decrypted [--account …] [--yes]`: removes stored plaintext from the index (body,
+  quotes, attachment text, calendar data from inside the encryption, embeddings). The messages stay as
+  headers-only, marked `is:encrypted`, and can be decrypted again with `donner sync --reparse pgp` —
+  the revocation path for accounts whose decryption is turned off again.
+- `index.hideEncrypted`: encrypted mail **without indexed content** (not decrypted, or purged) is
+  kept out of default `search`/`count`/`threads` results — subject and participants included.
+  Decrypted messages stay visible (no loss of results). Context hygiene for agents, not a security
+  boundary — `is:encrypted` and `donner sql` still see everything.
+- Failed decryption (missing key, empty gpg-agent cache, corrupt message) never aborts a sync: the
+  body stays empty, `is:encrypted` is set, and later syncs retry (up to 3 attempts);
+  `donner sync --reparse pgp` starts a fresh round.
+- `donner doctor` reports the decision state (not decided yet / on for which accounts / off) and
+  checks gpg and the keyring. The index schema upgrade (schema 5) marks mail without text for
+  re-reading automatically — already indexed encrypted mail is decrypted retroactively by the next
+  sync when its account has decryption enabled.
+
 ## [0.3.2] — 2026-09-30
 
 ### Fixed

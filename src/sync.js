@@ -9,6 +9,7 @@
 // that is bumped whenever a restart is detected.
 
 import { getMeta, setMeta, tx, stmt } from "./db.js";
+import { decryptForAccount } from "./config.js";
 import { DonnerError } from "./errors.js";
 import { matchesAny } from "./glob.js";
 import { chooseBody } from "./mime.js";
@@ -314,7 +315,7 @@ export async function sync({ db, bridge, cfg, full = false, bodies = cfg.index.b
   if (bodies && !aborted()) {
     await fetchContent({ db, bridge, cfg, epoch, stats, onProgress, aborted, now });
   }
-  stats.pending = db.prepare("SELECT count(*) AS n FROM messages WHERE content_state IN ('pending','error')").get().n;
+  stats.pending = db.prepare("SELECT count(*) AS n FROM messages WHERE content_state IN ('pending','error') OR (pgp_state = 'failed' AND pgp_attempts < ?)").get(PGP_MAX_ATTEMPTS).n;
   // The user's addresses (all account identities, configured ones, senders in sent folders)
   // and the people they write to; used by from:me, direction, people and triage.
   tx(db, () => {
@@ -400,10 +401,19 @@ function writeAddresses(db, id, from, to, cc, bcc, replyTo) {
 
 // ─── Content ────────────────────────────────────────────────────────
 
+// A failed PGP decryption (empty gpg-agent cache, missing key) is retried by the next syncs,
+// but only this often; `donner sync --reparse pgp` starts a fresh round.
+const PGP_MAX_ATTEMPTS = 3;
+
 async function fetchContent({ db, bridge, cfg, epoch, stats, onProgress, aborted, now }) {
   const pending = db
-    .prepare("SELECT id, mid, folder_id, account_id, from_addr, tb_id, tb_epoch, size, subject, date FROM messages WHERE content_state IN ('pending','error') ORDER BY date DESC")
-    .all();
+    .prepare(
+      `SELECT m.id, m.mid, m.folder_id, m.account_id, m.from_addr, m.tb_id, m.tb_epoch, m.size, m.subject, m.date, m.pgp_attempts, ac.name AS account_name
+       FROM messages m LEFT JOIN accounts ac ON ac.id = m.account_id
+       WHERE m.content_state IN ('pending','error') OR (m.pgp_state = 'failed' AND m.pgp_attempts < ?)
+       ORDER BY m.date DESC`
+    )
+    .all(PGP_MAX_ATTEMPTS);
   if (!pending.length) return;
   const n = Math.max(1, Math.min(16, cfg.index.concurrency || 4));
   const pool = new ParsePool({ size: n, timeoutMs: cfg.index.parseTimeoutMs || 60000 });
@@ -456,7 +466,9 @@ async function fetchContent({ db, bridge, cfg, epoch, stats, onProgress, aborted
           inflight.set(row.id, Date.now());
           try {
             const tbId = await currentTbId(db, bridge, row, epoch);
-            result = { row, content: await loadContent(bridge, tbId, row.size, cfg, pool, cancel.signal) };
+            // PGP decryption is opt-in per account (index.decryptPgp: true | false | [accounts]).
+            const decryptPgp = decryptForAccount(cfg.index.decryptPgp, { id: row.account_id, name: row.account_name });
+            result = { row, content: await loadContent(bridge, tbId, row.size, cfg, pool, cancel.signal, decryptPgp) };
           } finally {
             inflight.delete(row.id);
           }
@@ -496,7 +508,7 @@ async function currentTbId(db, bridge, row, epoch) {
   return m.id;
 }
 
-async function loadContent(bridge, tbId, size, cfg, pool, signal) {
+async function loadContent(bridge, tbId, size, cfg, pool, signal, decryptPgp = false) {
   const ix = cfg.index;
   if (!size || size <= ix.maxMessageBytes) {
     const raw = await bridge.raw(tbId, { signal });
@@ -505,6 +517,7 @@ async function loadContent(bridge, tbId, size, cfg, pool, signal) {
       maxAttachmentBytes: ix.maxAttachmentBytes,
       maxAttachmentTextChars: ix.maxAttachmentTextChars,
       pdftotext: ix.pdftotext !== false && ix.pdftotext !== "false",
+      decryptPgp,
       trustedAuthservIds: ix.trustedAuthservIds || [],
     });
     return { kind: "full", parsed };
@@ -544,6 +557,7 @@ async function loadContent(bridge, tbId, size, cfg, pool, signal) {
         maxChars: ix.maxAttachmentTextChars,
         maxBytes: ix.maxAttachmentBytes,
         pdftotext,
+        decryptPgp,
       });
       att.text = r.text || "";
       att.state = r.state;
@@ -565,8 +579,8 @@ function writeContent(db, r, now) {
   }
   if (r.copyFrom) {
     stmt(db, 
-      `UPDATE messages SET (body, quoted, snippet, att_text, attachment_count, auth_json, auth_verdict, hidden_removed, in_reply_to, list_id, reply_to, content_state, content_error, updated_at) =
-       (SELECT body, quoted, snippet, att_text, attachment_count, auth_json, auth_verdict, hidden_removed, in_reply_to, list_id, reply_to, content_state, NULL, ? FROM messages WHERE id = ?)
+      `UPDATE messages SET (body, quoted, snippet, att_text, attachment_count, auth_json, auth_verdict, hidden_removed, in_reply_to, list_id, reply_to, encrypted, pgp_state, pgp_attempts, subject_mismatch, content_state, content_error, updated_at) =
+       (SELECT body, quoted, snippet, att_text, attachment_count, auth_json, auth_verdict, hidden_removed, in_reply_to, list_id, reply_to, encrypted, pgp_state, pgp_attempts, subject_mismatch, content_state, NULL, ? FROM messages WHERE id = ?)
        WHERE id = ?`
     ).run(now(), r.copyFrom, row.id);
     stmt(db, "DELETE FROM attachments WHERE message_id = ?").run(row.id);
@@ -604,8 +618,13 @@ stmt(db, `INSERT INTO events(message_id, start, end, summary, location, organize
     in_reply_to: p.inReplyTo?.[0] || null,
     list_id: p.listId || null,
     reply_to: p.replyTo?.length ? JSON.stringify(p.replyTo) : null,
+    encrypted: p.encrypted ? 1 : 0,
+    pgp_state: p.pgpState ?? null,
+    // Failed decryption: retry budget up to PGP_MAX_ATTEMPTS, then only `--reparse pgp`.
+    pgp_attempts: p.pgpState === "failed" ? (row.pgp_attempts || 0) + 1 : 0,
+    subject_mismatch: p.subjectMismatch ? 1 : 0,
     content_state: r.content.kind,
-    content_error: null,
+    content_error: p.pgpState === "failed" ? `pgp: ${p.pgpError || "decryption failed"}`.slice(0, 500) : null,
     updated_at: now(),
   };
   if (r.content.kind === "full") {

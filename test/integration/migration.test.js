@@ -15,7 +15,7 @@ after(async () => {
   await env?.cleanup();
 });
 
-// Turn a freshly built schema-2 index back into what donner 0.1 wrote.
+// Turn a freshly built schema-5 index back into what donner 0.1 wrote.
 function downgradeToV1(db) {
   db.exec(`
     DROP TRIGGER messages_fts_ai; DROP TRIGGER messages_fts_ad; DROP TRIGGER messages_fts_au;
@@ -37,6 +37,8 @@ function downgradeToV1(db) {
     INSERT INTO messages_fts(rowid, subject, people, body, quoted, att_text) SELECT id, subject, people, body, quoted, att_text FROM messages;
     DROP TABLE identities; DROP TABLE contacts;
     ALTER TABLE messages DROP COLUMN auth_verdict;
+    ALTER TABLE messages DROP COLUMN encrypted; ALTER TABLE messages DROP COLUMN pgp_state;
+    ALTER TABLE messages DROP COLUMN pgp_attempts; ALTER TABLE messages DROP COLUMN subject_mismatch;
     DROP INDEX events_last; DROP INDEX events_uid;
     ALTER TABLE events DROP COLUMN sequence; ALTER TABLE events DROP COLUMN recurrence_id;
     ALTER TABLE events DROP COLUMN parsed_last; ALTER TABLE events DROP COLUMN active; ALTER TABLE events DROP COLUMN next_start;
@@ -58,7 +60,7 @@ test("a schema-1 index is upgraded on first open, then completed by the next syn
 
   // Readers (CLI search, MCP server) trigger the upgrade transparently.
   const ro = openDb(dbPath, { readOnly: true });
-  assert.equal(getMeta(ro, "schema_version"), "4");
+  assert.equal(getMeta(ro, "schema_version"), "5");
   assert.equal(search(ro, { query: "Müller" }).total, muellerBefore, "umlaut index rebuilt");
   assert.equal(search(ro, { query: "Mueller" }).total, muellerBefore);
   assert.ok(count(ro, { query: "from:me" }).total > 0, "identities filled from accounts and sent folders");
@@ -90,11 +92,13 @@ test("a schema-2 index (donner 0.2) gets identity ids and calendar versions, re-
   env.db.exec(`ALTER TABLE identities DROP COLUMN tb_identity; DROP INDEX events_uid;
     ALTER TABLE events DROP COLUMN sequence; ALTER TABLE events DROP COLUMN recurrence_id;
     ALTER TABLE events DROP COLUMN parsed_last; ALTER TABLE events DROP COLUMN active; ALTER TABLE events DROP COLUMN next_start;
+    ALTER TABLE messages DROP COLUMN encrypted; ALTER TABLE messages DROP COLUMN pgp_state;
+    ALTER TABLE messages DROP COLUMN pgp_attempts; ALTER TABLE messages DROP COLUMN subject_mismatch;
     UPDATE meta SET value = '2' WHERE key = 'schema_version';`);
   env.db.close();
   const db = openDb(dbPath);
   try {
-    assert.equal(getMeta(db, "schema_version"), "4");
+    assert.equal(getMeta(db, "schema_version"), "5");
     const pending = db.prepare("SELECT count(*) n FROM messages WHERE content_state = 'pending'").get().n;
     const all = db.prepare("SELECT count(*) n FROM messages").get().n;
     assert.ok(pending > 0 && pending < all / 3, `targeted re-read (${pending}/${all})`);

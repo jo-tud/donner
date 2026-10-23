@@ -103,7 +103,10 @@ redacted in `config` output and never logged; no shell is used for subprocesses 
 user queries is fully parameterised and FTS5 terms are always quoted; terminal output strips control
 characters from mail-derived text; MCP arguments are validated (types, enums, bounds, unknown keys);
 zip extraction is bounded (entries, per-entry and total size); one runtime dependency without
-install scripts.
+install scripts; PGP decryption runs the local gpg as `--batch --no-tty --pinentry-mode error --decrypt`
+(ciphertext on stdin, plaintext on stdout, nothing on disk, no passphrase in argv or logs, key operations
+limited to decrypt; failures are classified from machine-readable status lines, never from localised
+text, and never abort the sync).
 
 ## 4. Prompt injection
 
@@ -133,7 +136,14 @@ destroying legitimate content; they remain the agent's and user's responsibility
   does not, donner reports none (never a forged pass).
 - **SQL memory limit on Windows**: the address-space limit uses `ulimit` and is not available on
   Windows; capped functions, the timeout and serialisation still apply.
-- **Index at rest** is not encrypted by donner. Use full-disk encryption; `donner reset --yes` removes it.
+- **Index at rest** is not encrypted by donner — and when PGP-encrypted mail is decrypted during
+  indexing (opt-in per account, `index.decryptPgp`), it contains the plaintext of that mail too (the
+  same at-rest class as unencrypted mail in the index). Use full-disk encryption; `donner reset --yes`
+  removes it, `donner purge decrypted` removes just the stored plaintext of encrypted mail (e.g. after
+  turning decryption off for an account). `index.hideEncrypted` only hides encrypted mail without indexed
+  content (not decrypted, or purged; decrypted messages stay visible) from default search results —
+  `is:encrypted` and `donner sql` still see the rows, so this is context hygiene for agents, not access
+  control.
 - **Upstream**: tb-bridge does not fail pending requests when the extension disconnects (donner works
   around it) and runs without authentication by default; setting `TB_AUTH_TOKEN` is recommended.
 

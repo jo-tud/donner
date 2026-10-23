@@ -6,6 +6,8 @@
 //   facts:    ground truth that tests assert against
 
 import { buildMessage, buildPdf, buildDocx, buildXlsx, buildIcs } from "./mime-builder.js";
+import { buildPgpMime, buildInlinePgp, encrypt, usableGpgHome } from "./pgp.js";
+import { hasGpg, ARMOR_BEGIN, ARMOR_END } from "../../src/pgp.js";
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -158,7 +160,7 @@ export function generateCorpus({ seed = 42, count = 600, maxAttachmentKB = 64, s
   const facts = { calendar: {}, identity: {}, hike: [], serverSpam: [], spoofed: [], authSplit: [], preheader: [], invoices: [], injections: [], threads: [], meetings: [], shipping: [], docs: [], encodings: [], junk: [], trash: [], noMessageId: [], duplicates: [], large: [], forwards: [], newsletters: [] };
 
   const add = (accountId, folderPath, spec, extra = {}) => {
-    const raw = buildMessage(spec);
+    const raw = extra.raw || buildMessage(spec);
     const attachments = (spec.attachments || []).map((a, i) => ({
       partName: `1.${i + 2}`,
       name: a.filename,
@@ -703,6 +705,62 @@ export function generateCorpus({ seed = 42, count = 600, maxAttachmentKB = 64, s
     const mid = newMid("spam.example");
     add("account2", "/Filter/+spamverdacht", { from: { name: "Gewinnspiel", email: "win@spam.example" }, to: [ME_PRIVATE], subject: `Sie haben gewonnen ${i}`, date: Date.UTC(2026, 2, 1 + i), messageId: mid, text: "Stichwort Spamverdachtsfall." });
     facts.serverSpam.push({ mid });
+  }
+
+  // Encrypted mail: PGP/MIME with protected headers (account "Privat") and inline PGP (account
+  // "Firma"). With gpg installed the payload is real ciphertext, encrypted to a throwaway test
+  // key — the indexer decrypts it when index.decryptPgp allows the account
+  // (test/integration/pgp.test.js). Without gpg the same messages carry broken armor: detection
+  // and is:encrypted still work; decryption itself is unit-tested in test/unit/pgp.test.js.
+  {
+    const gpg = hasGpg() ? usableGpgHome() : null;
+    const broken = `${ARMOR_BEGIN}\nbroken\n${ARMOR_END}`;
+    const cases = [];
+
+    const mid1 = newMid("privat.example");
+    const inner1 = buildMessage({
+      from: PEOPLE[5],
+      to: [ME_PRIVATE],
+      subject: "Gehaltsverhandlung vertraulich",
+      date: Date.UTC(2026, 3, 12),
+      messageId: mid1,
+      text: "Die Verhandlungssache bleibt unter uns. Stichwort Geheimcode42.\n",
+    });
+    add(
+      "account2",
+      "/INBOX",
+      { from: PEOPLE[5], to: [ME_PRIVATE], subject: "pEp", date: Date.UTC(2026, 3, 12), messageId: mid1 },
+      {
+        raw: buildPgpMime(inner1, gpg ? encrypt(inner1, gpg.home) : broken, {
+          from: formatAddr(PEOPLE[5]),
+          to: ME_PRIVATE.email,
+          subject: "pEp", // placeholder outside, the real Subject is protected inside
+          date: "Sun, 12 Apr 2026 09:00:00 +0000",
+          messageId: mid1,
+        }),
+      }
+    );
+    cases.push({ kind: "pgp-mime", mid: mid1, account: "Privat", subject: "Gehaltsverhandlung vertraulich", outerSubject: "pEp", keyword: "Geheimcode42" });
+
+    const mid2 = newMid("firma.example");
+    const plain2 = "Der Termin ist am Freitag um 9. Stichwort Freitaggeheimnis.\n";
+    add(
+      "account1",
+      "/INBOX",
+      { from: PEOPLE[0], to: [ME_WORK], subject: "Terminabsprache", date: Date.UTC(2026, 3, 13), messageId: mid2 },
+      {
+        raw: buildInlinePgp(gpg ? encrypt(plain2, gpg.home) : broken, {
+          from: formatAddr(PEOPLE[0]),
+          to: ME_WORK.email,
+          subject: "Terminabsprache",
+          date: "Mon, 13 Apr 2026 09:00:00 +0000",
+          messageId: mid2,
+        }),
+      }
+    );
+    cases.push({ kind: "inline", mid: mid2, account: "Firma", subject: "Terminabsprache", keyword: "Freitaggeheimnis" });
+
+    facts.pgp = { decryptable: !!gpg, home: gpg ? gpg.home : null, cases };
   }
 
   messages.sort((a, b) => a.meta.date - b.meta.date);

@@ -36,6 +36,7 @@ src/mime.js            raw RFC 822 → document (postal-mime), auth results, bod
 src/html.js            HTML → text, hidden-content removal
 src/text.js            sanitising, quote/signature splitting, addresses, subjects
 src/attachments.js     text extraction: PDF (pdf.js), Office (zip.js), ICS, VCF, HTML, EML
+src/pgp.js             PGP decryption (local gpg): PGP/MIME, inline PGP, encrypted attachments
 src/db.js              schema, migrations, connection handling
 src/query.js           Gmail-style query language → FTS5 + SQL
 src/ops.js             search, count, show, thread, threads, people, status, resolve
@@ -59,7 +60,8 @@ folders(id, account_id, path, name, type, total, unread, indexed, synced_at, rec
 messages(id, mid, folder_id, account_id, tb_id, tb_epoch, date, from_name, from_addr, from_fold, to_json, cc_json,
          bcc_json, reply_to, subject, subject_norm, thread_id, in_reply_to, list_id, size, read, flagged, junk, tags,
          attachment_count, body, quoted, snippet, people, att_text, content_state, content_error,
-         auth_json, auth_verdict, hidden_removed, indexed_at, updated_at)
+         auth_json, auth_verdict, hidden_removed, encrypted, pgp_state, pgp_attempts, subject_mismatch,
+         indexed_at, updated_at)
 identities(addr, name, source, account_id)       -- all of the user's addresses (account | config | sent)
 contacts(addr, sent, last_sent)                  -- addresses the user has written to
 events(message_id, start, end, last_start, summary, location, organizer, method, status, rrule, uid)
@@ -101,6 +103,15 @@ content            — pending rows newest first, N concurrent fetches:
                        larger     → GET /messages/:id (Thunderbird's decoded parts) + small attachments
                                     one by one via POST /messages/:id/attachment
                        copy of an already indexed Message-ID → copy content, no download
+                     PGP-encrypted mail (PGP/MIME, inline PGP, encrypted attachments) is decrypted with the
+                     local gpg; protected headers win over the outer ones (a differing outer Subject is kept
+                     as `subject_mismatch`), the message keeps `is:encrypted`/`trust.encrypted`. A failed
+                     decryption (missing key, empty agent cache) leaves the content empty and is retried by
+                     the next syncs (up to 3 attempts; `donner sync --reparse pgp` starts a fresh round).
+                     Decryption is opt-in per account (`index.decryptPgp`: true | false | [accounts], asked
+                     once by setup/first sync, or set via `--decrypt-pgp`); `donner purge decrypted` removes
+                     stored plaintext again, `index.hideEncrypted` keeps encrypted mail without indexed content
+                     (not decrypted, or purged) out of default results; decrypted messages stay visible.
                      committed in batches of 50; Ctrl-C finishes the batch and exits
 threads            — union of the message's References/In-Reply-To, messages referencing it, same Message-ID;
                      when the message's own references resolve to nothing: same normalised subject within
@@ -138,7 +149,9 @@ All user input is passed as bound parameters; FTS5 terms are always double-quote
 - **Agents** → read-only tools; SQL restricted to single read-only statements in a child process
   with a read-only connection, `query_only`, timeout and output caps.
 - **Confidentiality** → private file modes, no network except the local bridge and an opt-in local
-  embedding endpoint.
+  embedding endpoint. Encrypted mail is decrypted only into the local index: gpg runs as a local child
+  process (stdin/stdout), no passphrase handling, no key export; the index then holds that plaintext at
+  rest (same class as unencrypted mail in the index).
 
 See [SECURITY-ANALYSIS.md](SECURITY-ANALYSIS.md).
 
@@ -150,5 +163,6 @@ per-session ids). `test/fixtures/harness.js` runs thunderbird-cli's **real** `br
 process) and **real** `background.js` (in a `vm` context) on top of it. For benchmarks the fake
 Thunderbird and the extension run in their own process (`test/fixtures/tb-process.js`), as in reality. `test/fixtures/corpus.js`
 generates a deterministic German/English mailbox with threads, PDF invoices, Office documents,
-calendar invites, newsletters, prompt-injection mails, charset edge cases, duplicates and a
-message without Message-ID.
+calendar invites, newsletters, prompt-injection mails, charset edge cases, duplicates, encrypted
+mail (PGP/MIME with protected headers and inline PGP, encrypted to a throwaway key when gpg is
+installed) and a message without Message-ID.

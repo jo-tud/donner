@@ -3,6 +3,7 @@
 
 import { htmlToText } from "./html.js";
 import { pdfToText } from "./pdf.js";
+import { isPgpAttachment, decryptGpg, stripCryptoSuffix } from "./pgp.js";
 import { readZipFiles } from "./zip.js";
 import { decodeEntities } from "./entities.js";
 import { sanitizeText } from "./text.js";
@@ -242,13 +243,24 @@ function vcfText(s) {
 
 /**
  * @param {{filename?: string, mimeType?: string, content: Buffer}} att
- * @param {{maxChars?: number, maxBytes?: number, parseEml?: (buf: Buffer) => Promise<string>}} opts
+ * @param {{maxChars?: number, maxBytes?: number, parseEml?: (buf: Buffer) => Promise<string>, decryptPgp?: boolean, pgpTimeoutMs?: number, decrypted?: boolean}} opts
  * @returns {Promise<{text: string, state: string, engine?: string}>}
  */
-export async function extractAttachmentText(att, { maxChars = 200000, maxBytes = 20 * 1024 * 1024, parseEml, pdftotext = false } = {}) {
+export async function extractAttachmentText(att, opts = {}) {
+  const { maxChars = 200000, maxBytes = 20 * 1024 * 1024, parseEml, pdftotext = false, decryptPgp = false, pgpTimeoutMs, decrypted = false } = opts;
+  const buf = Buffer.isBuffer(att.content) ? att.content : Buffer.from(att.content || []);
+  // Encrypted attachment (.gpg/.pgp/.asc or an armored payload): decrypt first, then extract
+  // from the plaintext as usual (one level only, so a decrypt bomb cannot nest). Signatures
+  // and key blocks are not encrypted data and fall through to the normal handling.
+  const head = buf.subarray(0, 300).toString("latin1");
+  const signedData = /-----BEGIN PGP (SIGNATURE|PUBLIC KEY BLOCK|PRIVATE KEY BLOCK|SIGNED MESSAGE)/.test(head);
+  if (decryptPgp && !decrypted && !signedData && isPgpAttachment(att.filename, att.mimeType, head)) {
+    const r = await decryptGpg(buf, { timeoutMs: pgpTimeoutMs, maxBytes });
+    if (!r.ok) return { text: "", state: "error", error: r.error };
+    return extractAttachmentText({ ...att, filename: stripCryptoSuffix(att.filename), content: r.buf }, { ...opts, decrypted: true });
+  }
   const kind = kindOf(att.filename, att.mimeType);
   if (!kind) return { text: "", state: "unsupported" };
-  const buf = Buffer.isBuffer(att.content) ? att.content : Buffer.from(att.content || []);
   if (buf.length > maxBytes) return { text: "", state: "too_large" };
   try {
     let text = "";

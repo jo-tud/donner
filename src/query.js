@@ -11,7 +11,7 @@
 //   has:invite has:event has:cancelled  calendar data
 //   in:inbox in:sent folder:Projekte    folder type / name / path / "Account/Path"
 //   account:Privat                      account name, id or address
-//   is:unread is:read is:flagged is:reply is:hidden is:suspicious is:junk
+//   is:unread is:read is:flagged is:reply is:hidden is:suspicious is:junk is:encrypted
 //   after:2025-01 before:2025-07-01     dates (YYYY, YYYY-MM, YYYY-MM-DD, DD.MM.YYYY, today, yesterday)
 //   newer_than:30d older_than:1y        relative dates (h, d, w, m, y)
 //   event_after:2026-10 event_before:.. calendar invitations by event start
@@ -68,7 +68,7 @@ Text:    subject:x body:x
 Files:   filename:x has:attachment has:pdf has:docx has:xlsx has:pptx has:ics has:eml has:zip has:image
 Calendar: has:invite (invitation, not cancelled) has:event (any calendar data, incl. tickets) has:cancelled
 Where:   in:inbox in:sent in:drafts folder:Projekte folder:Account/Path account:Privat
-Flags:   is:unread is:read is:flagged is:starred is:reply is:junk is:hidden is:suspicious is:authfail
+Flags:   is:unread is:read is:flagged is:starred is:reply is:junk is:hidden is:suspicious is:authfail is:encrypted
 Dates:   after:2025-01 before:2025-07-01 (exclusive)  since:2025-01 until:2025-03 (inclusive)  newer_than:30d older_than:1y  (YYYY, YYYY-MM, YYYY-MM-DD, DD.MM.YYYY, today, yesterday; units h d w m y)
 Events:  event_after:2026-10 event_before:2026-11 (by event date; recurring events count while they recur); --sort event
 More:    tag:$label1 label: list:heise thread:42 larger:1M smaller:100K id:123 mid:<message-id>
@@ -103,6 +103,9 @@ const IS_FLAGS = {
   suspicious: `(m.auth_verdict = 'fail' OR (m.hidden_removed = 1 AND m.list_id IS NULL AND m.auth_verdict IS NOT 'pass'
     AND coalesce(m.from_addr, '') NOT IN (SELECT addr FROM contacts) AND coalesce(m.from_addr, '') NOT IN (SELECT addr FROM identities)))`,
   authfail: `(m.auth_verdict = 'fail')`,
+  // Encrypted messages (PGP/MIME or inline PGP). With index.decryptPgp their plaintext is
+  // indexed like any other mail; the flag records that it was encrypted on the way.
+  encrypted: "m.encrypted = 1",
 };
 
 // ─── Lexer ──────────────────────────────────────────────────────────
@@ -560,6 +563,13 @@ function isMatchable(c) {
   return isWord(c) || (c.k === "or" && c.items.every(isWord));
 }
 
+/** Does the query talk about encrypted mail at all (is:encrypted / -is:encrypted)? */
+function mentionsEncrypted(node) {
+  if (!node) return false;
+  if (node.k === "term") return node.field === "is" && String(node.value).toLowerCase() === "encrypted";
+  return mentionsEncrypted(node.item) || (node.items || []).some(mentionsEncrypted);
+}
+
 export function compileQuery(q, extra = {}, now = Date.now()) {
   const ast = prune(parse(q));
   const where = [];
@@ -596,6 +606,12 @@ export function compileQuery(q, extra = {}, now = Date.now()) {
   if (extra.flagged) add("is", "flagged");
   if (extra.hasAttachment) add("has", "attachment");
   if (extra.thread !== undefined && extra.thread !== null) add("thread", extra.thread);
+
+  // index.hideEncrypted: encrypted mail without indexed content (not decrypted, or purged) stays
+  // out of default results — including its subject and participants. Decrypted messages are
+  // normal searchable mail (the user opted in) and always visible. Context hygiene for agents,
+  // not a security boundary: an explicit is:encrypted in the query shows all encrypted mail.
+  if (extra.hideEncrypted && !mentionsEncrypted(ast)) where.push("(m.encrypted = 0 OR m.pgp_state = 'decrypted')");
 
   return { match: match.length ? match.join(" AND ") : null, where, params, hasText: match.length > 0 };
 }

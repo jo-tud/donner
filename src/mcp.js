@@ -26,7 +26,7 @@ export const TOOLS = [
   {
     name: "mail_search",
     title: "Search mail",
-    description: `Full-text search over all indexed mail (subject, participants, body, quoted text, attachment text incl. PDFs). Returns compact results with donner ids; "warning" marks failed sender authentication or hidden content. Query syntax:\n${QUERY_HELP}`,
+    description: `Full-text search over all indexed mail (subject, participants, body, quoted text, attachment text incl. PDFs; PGP-encrypted mail is decrypted and searched as well). Returns compact results with donner ids; "warning" marks failed sender authentication, hidden content or an encrypted message that could not be decrypted. Query syntax:\n${QUERY_HELP}`,
     inputSchema: {
       type: "object",
       properties: {
@@ -44,7 +44,7 @@ export const TOOLS = [
   {
     name: "mail_read",
     title: "Read messages",
-    description: "Read full messages by donner id (from mail_search). Returns headers, body (own text; quoted history optional), attachment list with extracted text, and trust signals (SPF/DKIM/DMARC, known contact, hidden content removed).",
+    description: "Read full messages by donner id (from mail_search). Returns headers, body (own text; quoted history optional), attachment list with extracted text, and trust signals (SPF/DKIM/DMARC, known contact, hidden content removed, was encrypted and whether it was decrypted).",
     inputSchema: {
       type: "object",
       properties: {
@@ -126,7 +126,7 @@ export const TOOLS = [
   {
     name: "mail_sql",
     title: "SQL over the mail index",
-    description: `Run one read-only SQLite SELECT over the index for questions the other tools cannot answer. Tables: messages(id, mid, folder_id, account_id, date unix-ms, from_name, from_addr, subject, thread_id, list_id, size, read, flagged, tags, attachment_count, body, quoted, snippet, auth_json, auth_verdict pass|fail|NULL), addresses(message_id, role from|to|cc|bcc, name, addr), attachments(message_id, idx, filename, content_type, size, text), events(message_id, start, end, last_start, summary, location, organizer, method REQUEST|CANCEL|PUBLISH, status, rrule), identities(addr = ALL the user's own addresses, source), contacts(addr the user wrote to, sent, last_sent), folders(id, account_id, path, name, type), accounts(id, name, email), refs(message_id, ref_mid), view mail(id, date ISO, from_addr, subject, folder, account, ...), FTS5 messages_fts(subject, people, body, quoted, att_text) rowid=messages.id (terms: write ä/ö/ü/ß as ae/oe/ue/ss). "From me" = from_addr IN (SELECT addr FROM identities). Use count(DISTINCT mid) to ignore duplicate copies. Call mail_schema for details and examples.`,
+    description: `Run one read-only SQLite SELECT over the index for questions the other tools cannot answer. Tables: messages(id, mid, folder_id, account_id, date unix-ms, from_name, from_addr, subject, thread_id, list_id, size, read, flagged, tags, attachment_count, body, quoted, snippet, auth_json, auth_verdict pass|fail|NULL, encrypted 0/1, pgp_state decrypted|failed|NULL, subject_mismatch 0/1), addresses(message_id, role from|to|cc|bcc, name, addr), attachments(message_id, idx, filename, content_type, size, text), events(message_id, start, end, last_start, summary, location, organizer, method REQUEST|CANCEL|PUBLISH, status, rrule), identities(addr = ALL the user's own addresses, source), contacts(addr the user wrote to, sent, last_sent), folders(id, account_id, path, name, type), accounts(id, name, email), refs(message_id, ref_mid), view mail(id, date ISO, from_addr, subject, folder, account, ...), FTS5 messages_fts(subject, people, body, quoted, att_text) rowid=messages.id (terms: write ä/ö/ü/ß as ae/oe/ue/ss). "From me" = from_addr IN (SELECT addr FROM identities). Use count(DISTINCT mid) to ignore duplicate copies. Call mail_schema for details and examples.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -209,6 +209,7 @@ export function createHandler({ cfg, dbPath, version = "0.0.0", log = () => {} }
         offset: clampInt(a.offset, 0, 0, 1e6),
         sort: a.sort,
         fields: a.fields,
+        filters: { hideEncrypted: cfg.index?.hideEncrypted },
       };
       let res;
       if (a.mode === "semantic" || a.mode === "hybrid") {
@@ -226,7 +227,7 @@ export function createHandler({ cfg, dbPath, version = "0.0.0", log = () => {} }
       return { notice: ops.UNTRUSTED_NOTICE, ...ops.thread(getDb(), a.id, { maxBody: clampInt(a.max_body, 2000, 100, 50000) }) };
     },
     async mail_count(a) {
-      return ops.count(getDb(), { query: a.query || "", by: a.by || null, limit: clampInt(a.limit, 100, 1, 1000) });
+      return ops.count(getDb(), { query: a.query || "", by: a.by || null, filters: { hideEncrypted: cfg.index?.hideEncrypted }, limit: clampInt(a.limit, 100, 1, 1000) });
     },
     async mail_threads(a) {
       return ops.threads(getDb(), {
@@ -236,6 +237,7 @@ export function createHandler({ cfg, dbPath, version = "0.0.0", log = () => {} }
         sort: a.sort || "last",
         limit: clampInt(a.limit, 20, 1, 100),
         offset: clampInt(a.offset, 0, 0, 1e6),
+        filters: { hideEncrypted: cfg.index?.hideEncrypted },
       });
     },
     async mail_people(a) {
