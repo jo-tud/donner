@@ -303,15 +303,31 @@ test("index.decryptPgp in the config file is recognised as an explicit decision"
 
 // ─── hideEncrypted: encrypted mail out of default results ───────────
 
-test("hideEncrypted: default results exclude encrypted mail, explicit is:encrypted wins", () => {
+test("hideEncrypted: only encrypted mail without indexed content is hidden, explicit is:encrypted wins", () => {
   const hidden = compileQuery("rechnung", { hideEncrypted: true });
-  assert.ok(hidden.where.includes("m.encrypted = 0"));
+  assert.ok(hidden.where.includes("(m.encrypted = 0 OR m.pgp_state = 'decrypted')"));
   const shown = compileQuery("rechnung", {});
   assert.ok(!shown.where.some((w) => w.includes("encrypted")));
   const explicit = compileQuery("rechnung is:encrypted", { hideEncrypted: true });
-  assert.ok(!explicit.where.includes("m.encrypted = 0"), "the query asked for encrypted mail");
+  assert.ok(!explicit.where.some((w) => w.includes("pgp_state")), "the query asked for encrypted mail");
   const negated = compileQuery("rechnung -is:encrypted", { hideEncrypted: true });
-  assert.ok(!negated.where.includes("m.encrypted = 0"), "already excluded explicitly");
+  assert.ok(!negated.where.some((w) => w.includes("pgp_state")), "already excluded explicitly");
+});
+
+test("hideEncrypted: decrypted mail stays visible, undecrypted and purged mail does not", () => {
+  const db = openDb(":memory:");
+  try {
+    const ins = db.prepare("INSERT INTO messages(mid, folder_id, subject, body, content_state, encrypted, pgp_state) VALUES(?,?,?,?,?,?,?)");
+    ins.run("a@b", "f", "Vertrag", "Klartext", "full", 1, "decrypted");
+    ins.run("c@d", "f", "Gehalt", "", "full", 1, "failed");
+    ins.run("e@f", "f", "Urlaub", "", "full", 1, null); // purged
+    ins.run("g@h", "f", "Einkauf", "Milch", "full", 0, null);
+    const c = compileQuery("", { hideEncrypted: true });
+    const visible = db.prepare(`SELECT subject FROM messages m WHERE ${c.where.join(" AND ")} ORDER BY subject`).all(...c.params).map((r) => r.subject);
+    assert.deepEqual(visible, ["Einkauf", "Vertrag"], "decrypted and unencrypted mail are visible");
+  } finally {
+    db.close();
+  }
 });
 
 // ─── Purge: remove stored plaintext of decrypted mail ───────────────

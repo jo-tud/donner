@@ -1090,7 +1090,7 @@ async function doctor(ctx) {
     }
     else if (!countSecretKeys()) add("pgp decrypt", "warn", `gpg found, but the keyring has no secret key (${scope})`, "Import your key (gpg --import …), then run `donner sync --reparse pgp`.");
     else add("pgp decrypt", "ok", `gpg found — encrypted mail is decrypted for ${scope}`);
-    if (ctx.cfg.index.hideEncrypted) add("hide encrypted", "ok", "encrypted mail is hidden from default search results; an explicit is:encrypted shows it");
+    if (ctx.cfg.index.hideEncrypted) add("hide encrypted", "ok", "encrypted mail without indexed content is hidden from default search results; an explicit is:encrypted shows it");
   }
   if (ctx.cfg.embeddings?.enabled) {
     try {

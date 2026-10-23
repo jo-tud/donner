@@ -56,8 +56,9 @@ export const DEFAULTS = Object.freeze({
     // failures leave the message without content and are retried by later syncs
     // (`donner sync --reparse pgp` for a fresh round).
     decryptPgp: null,
-    // Keep encrypted mail out of default search/count/threads results (context hygiene for
-    // agents, NOT a security boundary — `is:encrypted` and `donner sql` still see it).
+    // Keep encrypted mail without indexed content (not decrypted, or purged) out of default
+    // search/count/threads results — context hygiene for agents, NOT a security boundary
+    // (`is:encrypted` and `donner sql` still see it). Decrypted messages are always visible.
     // An explicit is:encrypted (or -is:encrypted) in the query always wins.
     hideEncrypted: false,
     // Authentication-Results are only trusted from these receiving servers (authserv-id,

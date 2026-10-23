@@ -607,9 +607,11 @@ export function compileQuery(q, extra = {}, now = Date.now()) {
   if (extra.hasAttachment) add("has", "attachment");
   if (extra.thread !== undefined && extra.thread !== null) add("thread", extra.thread);
 
-  // index.hideEncrypted: encrypted mail stays out of default results (context hygiene for
-  // agents, not a security boundary). An explicit is:encrypted in the query always wins.
-  if (extra.hideEncrypted && !mentionsEncrypted(ast)) where.push("m.encrypted = 0");
+  // index.hideEncrypted: encrypted mail without indexed content (not decrypted, or purged) stays
+  // out of default results — including its subject and participants. Decrypted messages are
+  // normal searchable mail (the user opted in) and always visible. Context hygiene for agents,
+  // not a security boundary: an explicit is:encrypted in the query shows all encrypted mail.
+  if (extra.hideEncrypted && !mentionsEncrypted(ast)) where.push("(m.encrypted = 0 OR m.pgp_state = 'decrypted')");
 
   return { match: match.length ? match.join(" AND ") : null, where, params, hasText: match.length > 0 };
 }

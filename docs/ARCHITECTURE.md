@@ -110,7 +110,8 @@ content            — pending rows newest first, N concurrent fetches:
                      the next syncs (up to 3 attempts; `donner sync --reparse pgp` starts a fresh round).
                      Decryption is opt-in per account (`index.decryptPgp`: true | false | [accounts], asked
                      once by setup/first sync, or set via `--decrypt-pgp`); `donner purge decrypted` removes
-                     stored plaintext again, `index.hideEncrypted` keeps encrypted mail out of default results.
+                     stored plaintext again, `index.hideEncrypted` keeps encrypted mail without indexed content
+                     (not decrypted, or purged) out of default results; decrypted messages stay visible.
                      committed in batches of 50; Ctrl-C finishes the batch and exits
 threads            — union of the message's References/In-Reply-To, messages referencing it, same Message-ID;
                      when the message's own references resolve to nothing: same normalised subject within

@@ -140,9 +140,10 @@ destroying legitimate content; they remain the agent's and user's responsibility
   indexing (opt-in per account, `index.decryptPgp`), it contains the plaintext of that mail too (the
   same at-rest class as unencrypted mail in the index). Use full-disk encryption; `donner reset --yes`
   removes it, `donner purge decrypted` removes just the stored plaintext of encrypted mail (e.g. after
-  turning decryption off for an account). `index.hideEncrypted` only hides encrypted mail from default
-  search results — `is:encrypted` and `donner sql` still see the rows, so this is context hygiene for
-  agents, not access control.
+  turning decryption off for an account). `index.hideEncrypted` only hides encrypted mail without indexed
+  content (not decrypted, or purged; decrypted messages stay visible) from default search results —
+  `is:encrypted` and `donner sql` still see the rows, so this is context hygiene for agents, not access
+  control.
 - **Upstream**: tb-bridge does not fail pending requests when the extension disconnects (donner works
   around it) and runs without authentication by default; setting `TB_AUTH_TOKEN` is recommended.
 

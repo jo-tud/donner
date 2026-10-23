@@ -23,9 +23,10 @@ The JSON output shape, error codes and MCP tool names are the public API.
   (Body, Zitate, Anhangstext, Kalenderdaten aus dem verschlüsselten Teil). Die Mails bleiben als Header
   mit `is:encrypted` stehen und können mit `donner sync --reparse pgp` erneut entschlüsselt werden —
   der Aufräumpfad für Konten, deren Entschlüsselung wieder abgewählt wird.
-- `index.hideEncrypted`: verschlüsselte Mails bleiben aus Standardergebnissen von `search`/`count`/
-  `threads` (Kontext-Hygiene für Agenten, keine Sicherheitsgrenze — `is:encrypted` und `donner sql`
-  sehen sie weiterhin).
+- `index.hideEncrypted`: verschlüsselte Mails **ohne indexierten Inhalt** (nicht entschlüsselt oder
+  bereinigt) bleiben aus Standardergebnissen von `search`/`count`/`threads` — inklusive Betreff und
+  Teilnehmern. Entschlüsselte Mails bleiben immer sichtbar (kein Ergebnisverlust möglich). Kontext-
+  Hygiene für Agenten, keine Sicherheitsgrenze — `is:encrypted` und `donner sql` sehen alles.
 - Fehlgeschlagene Entschlüsselung (fehlender Schlüssel, leerer gpg-agent-Cache, kaputte Nachricht) bricht
   nie einen Sync ab: Body bleibt leer, `is:encrypted` wird gesetzt und die nächsten Syncs versuchen es
   erneut (bis zu 3 Versuche); `donner sync --reparse pgp` startet eine neue Runde.

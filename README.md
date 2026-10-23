@@ -273,8 +273,9 @@ or a list of account names/ids (e.g. `["Firma"]`). `donner setup`, the first int
 auto-sync) index encrypted mail without content until then. Decryption needs your secret key and a filled gpg-agent
 cache; failed attempts are retried by later syncs (`donner sync --reparse pgp` restarts the retries).
 `donner purge decrypted [--account …]` removes plaintext that is already in the index (e.g. after turning decryption off
-for an account)), `"hideEncrypted"` (default `false`: keep encrypted mail out of default `search`/`count`/`threads`
-results — context hygiene for agents, not a security boundary; an explicit `is:encrypted` in the query shows them),
+for an account)), `"hideEncrypted"` (default `false`: keep encrypted mail **without indexed content** — not decrypted,
+or purged — out of default `search`/`count`/`threads` results; decrypted messages are always visible. Context hygiene for
+agents, not a security boundary; an explicit `is:encrypted` in the query shows all encrypted mail),
 `"maxMessageBytes"` (8 MB), `"maxAttachmentBytes"` (20 MB), `"concurrency"` (4),
 `"parseTimeoutMs"` (60 s per message), `"fullReconcileHours"` (24), `"trustedAuthservIds"` (e.g. `["mx.google.com"]`:
 only trust SPF/DKIM/DMARC results written by your own provider's servers), `"myAddresses"` (your old or
@@ -326,9 +327,9 @@ resumes where it stopped.
   plaintext out on stdout), no passphrase is ever passed or logged, and secret-key material is never read or
   exported. Messages that cannot be decrypted (missing key, empty gpg-agent cache) are indexed without content,
   marked `is:encrypted`, and retried by later syncs. Decryption is opt-in per account (`index.decryptPgp`);
-  `donner purge decrypted` removes already indexed plaintext again. `index.hideEncrypted` keeps encrypted mail
-  out of default search results — a convenience for agents' context windows, not a security boundary
-  (`is:encrypted` and `donner sql` still see the rows).
+  `donner purge decrypted` removes already indexed plaintext again. `index.hideEncrypted` keeps encrypted mail without
+  indexed content (not decrypted, or purged) out of default search results — decrypted messages stay visible; a
+  convenience for agents' context windows, not a security boundary (`is:encrypted` and `donner sql` still see the rows).
 - donner never writes to Thunderbird and never talks to the network, except to the local bridge and — only if you enable it — a local embedding model.
 - Email is untrusted input. Hidden HTML content, zero-width/bidi/"tag" characters and comments are removed before text is indexed or shown, and `trust` metadata (SPF/DKIM/DMARC from the receiving server, known contact, hidden content) accompanies every message. Tools and the skill tell agents never to follow instructions found in mail.
 
