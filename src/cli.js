@@ -5,8 +5,8 @@ import { rmSync, existsSync, writeFileSync, readFileSync, mkdirSync, statSync } 
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { loadConfig, writeDefaultConfig, redactConfig, isLoopbackHost, ensurePrivateDir } from "./config.js";
-import { openDb, markForReparse, tx } from "./db.js";
+import { loadConfig, writeDefaultConfig, redactConfig, isLoopbackHost, ensurePrivateDir, saveIndexConfig, decryptForAccount, parseDecryptPgpSpec } from "./config.js";
+import { openDb, markForReparse, tx, purgeDecrypted, countDecrypted } from "./db.js";
 import { BridgeClient } from "./bridge.js";
 import { DonnerError, exitCodeFor } from "./errors.js";
 import { sync } from "./sync.js";
@@ -44,7 +44,7 @@ const FILTER_OPTIONS = {
   "has-attachment": { type: "boolean" },
 };
 
-function filtersFrom(v) {
+function filtersFrom(v, ctx) {
   return {
     from: v.from,
     to: v.to,
@@ -55,6 +55,8 @@ function filtersFrom(v) {
     unread: v.unread,
     flagged: v.flagged,
     hasAttachment: v["has-attachment"],
+    // index.hideEncrypted: keep encrypted mail out of default results (explicit is:encrypted wins)
+    hideEncrypted: ctx?.cfg?.index?.hideEncrypted,
   };
 }
 
@@ -93,7 +95,7 @@ function command(name, def) {
 
 command("sync", {
   summary: "Index new and changed mail from Thunderbird",
-  usage: "donner sync [--full] [--no-bodies] [--folder <id|glob>]... [--reparse <set,…>] [--quiet]",
+  usage: "donner sync [--full] [--no-bodies] [--folder <id|glob>]... [--reparse <set,…>] [--decrypt-pgp all|none|<konto,…>] [--quiet]",
   help: `Reads mail through the thunderbird-cli bridge and updates the local index.
 Only changed folders are listed; only new messages are downloaded. Safe to interrupt
 with Ctrl-C: progress is committed in batches and the next run continues.
@@ -103,9 +105,13 @@ with Ctrl-C: progress is committed in batches and the next run continues.
   --folder <x>    only this folder (id like "account1://INBOX" or glob "Firma/Projekte/**")
   --reparse <set> read messages again from Thunderbird, e.g. after installing pdftotext or gpg:
                   pdf, attachments, pgp, empty, hidden, calendar, headers, auth, large, all
+  --decrypt-pgp <x>  decrypt PGP-encrypted mail for "all", "none" or these accounts (names,
+                  comma-separated) and save the answer in the config. Without it the first
+                  interactive sync asks once; headless runs index encrypted mail without content
   --quiet         no progress output`,
-  options: { full: { type: "boolean" }, "no-bodies": { type: "boolean" }, folder: { type: "string", multiple: true }, reparse: { type: "string" }, quiet: { type: "boolean", short: "q" } },
+  options: { full: { type: "boolean" }, "no-bodies": { type: "boolean" }, folder: { type: "string", multiple: true }, reparse: { type: "string" }, "decrypt-pgp": { type: "string" }, quiet: { type: "boolean", short: "q" } },
   async run(ctx, v) {
+    await ensureDecryptPgp(ctx, { spec: v["decrypt-pgp"] });
     const reparse = v.reparse ? v.reparse.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean) : null;
     const stats = await ctx.runSync({ full: v.full, bodies: v["no-bodies"] ? false : undefined, folders: v.folder || null, quiet: v.quiet, reparse });
     ctx.out(stats, () => renderSyncStats(ctx, stats));
@@ -122,6 +128,7 @@ command("watch", {
   async run(ctx, v) {
     const interval = v.interval ? durationMs(v.interval, "interval") : 5 * 60000;
     if (interval < 10000) throw new DonnerError("INVALID_ARGS", "--interval must be at least 10s.");
+    await ensureDecryptPgp(ctx);
     const ac = new AbortController();
     ctx.onInterrupt(() => ac.abort());
     const log = (msg) => process.stderr.write(`[${new Date().toISOString()}] ${msg}\n`);
@@ -166,7 +173,7 @@ Flags (same as operators): --from --to --folder --account --since --until --unre
   async run(ctx, v, pos) {
     const query = pos.join(" ");
     const db = ctx.dbRO();
-    const opts = { query, limit: intOpt(v.limit, "limit", 20, 1), offset: intOpt(v.offset, "offset", 0), sort: v.sort, fields: v.fields ? v.fields.split(",") : undefined, filters: filtersFrom(v) };
+    const opts = { query, limit: intOpt(v.limit, "limit", 20, 1), offset: intOpt(v.offset, "offset", 0), sort: v.sort, fields: v.fields ? v.fields.split(",") : undefined, filters: filtersFrom(v, ctx) };
     let res;
     if (v.semantic || v.hybrid) {
       const { semanticSearch } = await import("./semantic.js");
@@ -190,7 +197,7 @@ folders) are counted once.
 direction: "sent" = written by one of your addresses (\`donner status\` lists them).`,
   options: { ...FILTER_OPTIONS, by: { type: "string" }, limit: { type: "string", short: "n" } },
   async run(ctx, v, pos) {
-    const res = ops.count(ctx.dbRO(), { query: pos.join(" "), by: v.by, filters: filtersFrom(v), limit: intOpt(v.limit, "limit", 100, 1) });
+    const res = ops.count(ctx.dbRO(), { query: pos.join(" "), by: v.by, filters: filtersFrom(v, ctx), limit: intOpt(v.limit, "limit", 100, 1) });
     ctx.out(res, () => {
       if (!res.groups) return `${res.total}`;
       const keyText = (g) => (Array.isArray(g.key) ? g.key.map((k) => k ?? "(none)").join("  ") : g.key ?? "(none)");
@@ -227,7 +234,7 @@ Examples:
       sort: v.sort || "last",
       limit: intOpt(v.limit, "limit", 20, 1),
       offset: intOpt(v.offset, "offset", 0),
-      filters: filtersFrom(v),
+      filters: filtersFrom(v, ctx),
     });
     ctx.out(res, () =>
       [
@@ -504,7 +511,7 @@ look like yours, and installs the background service that keeps the index fresh.
 Safe to run again at any time — after updating donner, it updates the registrations, the skill
 and the service and upgrades the index.
 
-  --yes           no questions (addresses are only suggested, not added)
+  --yes           no questions (addresses are only suggested, not added; encrypted mail is not decrypted)
   --no-sync       do not build the index now (the background service will)
   --no-service    no background service (the MCP server still syncs while Claude runs)
   --no-claude     do not touch Claude Desktop / Claude Code / the skill
@@ -553,7 +560,10 @@ and the service and upgrades the index.
         err.code === "AUTH_REQUIRED" ? err.hint : "Install thunderbird-cli (https://github.com/vitalio-sh/thunderbird-cli#quick-start), start `tb-bridge` and Thunderbird, then run `donner setup` again.");
     }
 
-    // 3. PDF text
+    // 3. Encrypted mail (PGP): opt-in per account — asked once, saved to the config.
+    step("ok", "pgp decrypt", describeDecryptPgp(await ensureDecryptPgp(ctx, { prompt: interactive }), ctx.cfg.sources.decryptPgp === "config"));
+
+    // 4. PDF text
     const wantPdf = ctx.cfg.index.pdftotext !== false && ctx.cfg.index.pdftotext !== "false";
     if (!wantPdf) step("skip", "pdf text", "pdftotext disabled in the config");
     else if (hasPdftotext()) step("ok", "pdf text", "pdftotext (poppler) found");
@@ -562,7 +572,7 @@ and the service and upgrades the index.
       step("warn", "pdf text", "pdftotext not installed — text in many PDFs will not be found", `${how}; afterwards: donner sync --reparse pdf`);
     }
 
-    // 4. Claude Desktop, Claude Code, skill
+    // 5. Claude Desktop, Claude Code, skill
     let restartDesktop = false;
     if (v["no-claude"]) step("skip", "claude", "skipped (--no-claude)");
     else {
@@ -582,7 +592,7 @@ and the service and upgrades the index.
       else step("ok", "skill", `${k.status === "unchanged" ? "up to date" : k.status} (${k.path})`);
     }
 
-    // 5. Index — stop a running service first so the new version does the (re)indexing.
+    // 6. Index — stop a running service first so the new version does the (re)indexing.
     const stopped = serviceWanted && (os === "linux" || os === "darwin") ? (await serviceCommand("stop", { interval })).stopped : false;
     let syncStats = null;
     if (v["no-sync"]) step("skip", "index", serviceWanted ? "not built now; the background service will build it" : "not built now; run `donner sync`");
@@ -721,6 +731,38 @@ command("reset", {
   },
 });
 
+command("purge", {
+  summary: "Remove decrypted plaintext of encrypted mail from the index",
+  usage: "donner purge decrypted [--account <name|id>]… [--yes]",
+  help: `Removes the stored plaintext that an earlier decryption of PGP-encrypted mail put into
+the index (body, quotes, snippet, attachment text, calendar data from inside the encryption).
+The messages stay in the index as headers-only, marked is:encrypted; \`donner sync --reparse pgp\`
+can decrypt them again later. Headers (subject, participants) are kept as indexed.
+
+  --account <x>   only this account (id or name; repeatable)
+  --yes           no confirmation question`,
+  options: { account: { type: "string", multiple: true }, yes: { type: "boolean", short: "y" } },
+  async run(ctx, v, pos) {
+    if (pos[0] !== "decrypted") throw new DonnerError("INVALID_ARGS", `Unknown purge target "${pos[0] || ""}".`, "Use: donner purge decrypted");
+    const accountIds = v.account?.length ? await resolveAccountIds(ctx, v.account) : null;
+    const db = ctx.dbRW();
+    try {
+      const before = countDecrypted(db, { accountIds });
+      if (!before.messages) return ctx.out(before, () => "nothing to purge — no decrypted encrypted mail in the index");
+      if (!v.yes) {
+        if (ctx.json || !process.stdin.isTTY) throw new DonnerError("INVALID_ARGS", "Refusing to purge without confirmation.", "Pass --yes to confirm.");
+        if (!(await askYesNo(`Remove the stored plaintext of ${before.messages} encrypted message(s) from the index? [y/N]`))) {
+          return ctx.out({ cancelled: true }, () => "cancelled");
+        }
+      }
+      const res = tx(db, () => purgeDecrypted(db, { accountIds }));
+      ctx.out(res, () => `removed: ${res.messages} message(s), ${res.attachments} attachment text(s), ${res.events} calendar entr${res.events === 1 ? "y" : "ies"} — the messages stay in the index, marked is:encrypted`);
+    } finally {
+      db.close();
+    }
+  },
+});
+
 command("version", {
   summary: "Print the version",
   usage: "donner version",
@@ -851,6 +893,118 @@ function renderSyncStats(ctx, s) {
   return parts.join("\n");
 }
 
+// ─── PGP decryption (opt-in) ────────────────────────────────────────────────
+
+async function askLine(q) {
+  const rl = (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await rl.question(q)).trim();
+  } finally {
+    rl.close();
+  }
+}
+
+async function askYesNo(q) {
+  return /^(y|j|yes|ja)$/i.test((await askLine(`${q} `)).trim());
+}
+
+/** Accounts as {id, name}: from the index, or from the bridge before the first sync. */
+async function accountRows(ctx) {
+  try {
+    const db = ctx.dbRO();
+    const rows = db.prepare("SELECT id, name FROM accounts").all();
+    db.close();
+    if (rows.length) return rows;
+  } catch {
+    // no index yet — ask the bridge
+  }
+  try {
+    const r = await ctx.bridge().accounts();
+    return (r || []).map((a) => ({ id: a.id, name: a.name || a.id }));
+  } catch {
+    return [];
+  }
+}
+
+function describeDecryptPgp(value, decided = true) {
+  if (value === true) return "encrypted mail is decrypted for all accounts";
+  if (Array.isArray(value) && value.length) return `encrypted mail is decrypted for: ${value.join(", ")}`;
+  if (decided) return "off — encrypted mail is indexed without its content";
+  return "not decided — encrypted mail is indexed without its content (opt-in; `donner sync --decrypt-pgp …`)";
+}
+
+/** After a decision: offer to remove already stored plaintext of accounts that stay undecrypted. */
+async function offerPurgeDecrypted(ctx, rows, value, askMode) {
+  const hidden = rows.filter((a) => !decryptForAccount(value, a));
+  if (!hidden.length) return;
+  let total = 0;
+  try {
+    const db = ctx.dbRO();
+    for (const a of hidden) total += countDecrypted(db, { accountIds: [a.id] }).messages;
+    db.close();
+  } catch {
+    return; // no index yet
+  }
+  if (!total) return;
+  const where = hidden.map((a) => a.name || a.id).join(", ");
+  if (askMode && (await askYesNo(`  ${total} already decrypted message(s) in ${where} — remove the stored plaintext from the index? [y/N]`))) {
+    const db = ctx.dbRW();
+    try {
+      const res = tx(db, () => purgeDecrypted(db, { accountIds: hidden.map((a) => a.id) }));
+      process.stdout.write(`  removed the plaintext of ${res.messages} message(s); they stay in the index, marked is:encrypted.\n`);
+    } finally {
+      db.close();
+    }
+  } else if (!askMode) {
+    process.stderr.write(`note: ${total} decrypted message(s) in ${where} still hold plaintext in the index; remove with \`donner purge decrypted\`.\n`);
+  }
+}
+
+/**
+ * One-time decision whether PGP-encrypted mail is decrypted and indexed (opt-in per account).
+ * `spec` is the --decrypt-pgp value ("all" | "none" | account names). Questions are asked only
+ * on a TTY: headless runs (service, MCP auto-sync) never prompt and index encrypted mail without
+ * content until the decision is made in `donner setup`, `donner sync --decrypt-pgp …` or the config.
+ */
+async function ensureDecryptPgp(ctx, { spec, prompt = true } = {}) {
+  const askMode = prompt && !ctx.json && process.stdin.isTTY && process.stdout.isTTY;
+  if (spec === undefined && (ctx.cfg.sources.decryptPgp === "config" || !askMode)) return ctx.cfg.index.decryptPgp;
+  const rows = await accountRows(ctx);
+  const names = rows.map((a) => a.name || a.id);
+  let value;
+  if (spec !== undefined) {
+    value = parseDecryptPgpSpec(spec, names);
+    if (value === null) throw new DonnerError("INVALID_ARGS", `Invalid --decrypt-pgp "${spec}".`, "Use \"all\", \"none\" or comma-separated account names (`donner status` lists them).");
+  } else {
+    process.stdout.write(
+      `Encrypted mail (PGP/MIME, inline PGP): decrypt it locally with gpg and index the plaintext?\n` +
+        `The plaintext then lives in the local index, like unencrypted mail.${names.length ? `\nAccounts: ${names.join(", ")}` : ""}\n` +
+        `[a]ll accounts / [n]one (keep content out) / comma-separated account names (empty = none): `
+    );
+    value = parseDecryptPgpSpec(await askLine(""), names);
+    if (value === null) {
+      process.stdout.write("  not a valid account list — encrypted mail stays undecrypted (change with `donner sync --decrypt-pgp …` or index.decryptPgp)\n");
+      value = false;
+    }
+  }
+  saveIndexConfig({ decryptPgp: value });
+  ctx.cfg.index.decryptPgp = value;
+  ctx.cfg.sources.decryptPgp = "config";
+  await offerPurgeDecrypted(ctx, rows, value, askMode);
+  return value;
+}
+
+async function resolveAccountIds(ctx, accounts) {
+  const rows = await accountRows(ctx);
+  const ids = [];
+  for (const a of accounts) {
+    const hit = rows.find((r) => r.id === a || String(r.name || "").toLowerCase() === a.toLowerCase());
+    if (!hit) throw new DonnerError("INVALID_ARGS", `Unknown account "${a}".`, `Known: ${rows.map((r) => r.name || r.id).join(", ") || "(none indexed yet)"}`);
+    ids.push(hit.id);
+  }
+  return ids;
+}
+
 // ─── Doctor ─────────────────────────────────────────────────────────
 
 async function doctor(ctx) {
@@ -924,15 +1078,19 @@ async function doctor(ctx) {
     else add("pdf text", "warn", "built-in extractor only (pdftotext not installed)", "Install poppler-utils for much better PDF coverage, then run `donner sync --reparse pdf`.");
   }
   {
-    const want = ctx.cfg.index.decryptPgp !== false && ctx.cfg.index.decryptPgp !== "false";
-    if (!want) add("pgp decrypt", "ok", "disabled (index.decryptPgp: false)");
+    const d = ctx.cfg.index.decryptPgp;
+    const scope = d === true ? "all accounts" : Array.isArray(d) && d.length ? `only: ${d.join(", ")}` : null;
+    const decided = ctx.cfg.sources.decryptPgp === "config";
+    if (!decided) add("pgp decrypt", "warn", "not decided yet — encrypted mail is indexed without its content",
+      "Run `donner setup` or `donner sync` and answer the question (or `donner sync --decrypt-pgp all|none|<accounts>`).");
+    else if (!scope) add("pgp decrypt", "ok", "off — encrypted mail is only marked, never decrypted");
     else if (!hasGpg()) {
       const how = process.platform === "darwin" ? "brew install gnupg" : process.platform === "win32" ? "install Gpg4win (or GnuPG) and put gpg on PATH" : "sudo apt install gnupg   (Fedora: sudo dnf install gnupg2)";
-      add("pgp decrypt", "warn", "gpg not installed — encrypted mail is indexed without its content", `${how}; afterwards: donner sync --reparse pgp`);
+      add("pgp decrypt", "warn", `gpg not installed — encrypted mail is indexed without its content (${scope})`, `${how}; afterwards: donner sync --reparse pgp`);
     }
-    else if (!countSecretKeys()) add("pgp decrypt", "warn", "gpg found, but the keyring has no secret key — encrypted mail cannot be decrypted",
-      "Import your key (gpg --import …), then run `donner sync --reparse pgp`.");
-    else add("pgp decrypt", "ok", "gpg found — encrypted mail is decrypted for the index");
+    else if (!countSecretKeys()) add("pgp decrypt", "warn", `gpg found, but the keyring has no secret key (${scope})`, "Import your key (gpg --import …), then run `donner sync --reparse pgp`.");
+    else add("pgp decrypt", "ok", `gpg found — encrypted mail is decrypted for ${scope}`);
+    if (ctx.cfg.index.hideEncrypted) add("hide encrypted", "ok", "encrypted mail is hidden from default search results; an explicit is:encrypted shows it");
   }
   if (ctx.cfg.embeddings?.enabled) {
     try {
@@ -955,7 +1113,7 @@ function helpText(name, st) {
   const groups = [
     ["Start", ["setup", "uninstall"]],
     ["Search & read", ["search", "show", "thread", "threads", "count", "people", "attachment", "sql", "schema"]],
-    ["Index", ["sync", "watch", "status", "doctor", "embed", "reset"]],
+    ["Index", ["sync", "watch", "status", "doctor", "embed", "purge", "reset"]],
     ["Integrations", ["mcp", "skill", "resolve", "service", "config"]],
   ];
   const out = [
