@@ -71,6 +71,24 @@ export function encrypt(plain, home, { armor = true } = {}) {
   return runGpg(home, args, Buffer.isBuffer(plain) ? plain : Buffer.from(String(plain), "utf8"));
 }
 
+/** Fingerprint of the (only) primary key in `home`, secret or public. */
+export function fingerprint(home, { secret = true } = {}) {
+  const out = runGpg(home, ["--with-colons", secret ? "--list-secret-keys" : "--list-keys"]).toString("utf8");
+  return out.split("\n").find((l) => l.startsWith("fpr:"))?.split(":")[9];
+}
+
+/**
+ * Sign with the key of `signerHome` and encrypt to the key of `recipientHome`, with the
+ * signer's public key embedded in the signature (--include-key-block). The recipient's
+ * keyring does not know the signer — what a mail from a stranger looks like.
+ */
+export function signEncrypt(plain, signerHome, recipientHome) {
+  const recipient = fingerprint(recipientHome);
+  runGpg(signerHome, ["--import"], runGpg(recipientHome, ["--export", recipient]));
+  const args = ["--armor", "--include-key-block", "--local-user", fingerprint(signerHome), "--recipient", recipient, "--sign", "--encrypt"];
+  return runGpg(signerHome, args, Buffer.from(String(plain), "utf8")).toString("utf8");
+}
+
 /**
  * Build a PGP/MIME message (RFC 3156/8551): multipart/encrypted with the encrypted
  * payload as second part. `inner` is the plaintext MIME entity (usually buildMessage output).

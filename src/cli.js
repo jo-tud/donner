@@ -735,7 +735,8 @@ command("purge", {
   summary: "Remove decrypted plaintext of encrypted mail from the index",
   usage: "donner purge decrypted [--account <name|id>]… [--yes]",
   help: `Removes the stored plaintext that an earlier decryption of PGP-encrypted mail put into
-the index (body, quotes, snippet, attachment text, calendar data from inside the encryption).
+the index (body, quotes, snippet, attachment text, calendar data from inside the encryption,
+embeddings for semantic search).
 The messages stay in the index as headers-only, marked is:encrypted; \`donner sync --reparse pgp\`
 can decrypt them again later. Headers (subject, participants) are kept as indexed.
 

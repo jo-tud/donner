@@ -10,25 +10,42 @@
 //    (no pinentry popup, no hang) and no passphrase is ever passed in argv or logged.
 //  - Secret-key material is never read or exported; the only key operation is decrypt (the
 //    doctor's `countSecretKeys` reads colon-listing metadata, never key material).
+//  - No network and no keyring changes: keyserver lookups and key imports that the user's
+//    gpg.conf may enable are switched off for the decryption (see decryptArgs).
 //  - Failures are classified from gpg's machine-readable status lines (`--status-fd`), never
 //    from the (localised) stderr text.
 
 import { spawn, spawnSync } from "node:child_process";
 
 let gpgAvailable;
+let gpgOptions = null;
 
 /** Is a gpg binary on PATH? Set DONNER_NO_GPG=1 to pretend there is none. */
 export function hasGpg() {
   if (process.env.DONNER_NO_GPG) return false;
   if (gpgAvailable === undefined) {
     try {
-      const r = spawnSync("gpg", ["--version"], { stdio: "ignore", timeout: 5000, shell: false });
+      const r = spawnSync("gpg", ["--dump-options"], { encoding: "utf8", timeout: 5000, shell: false });
       gpgAvailable = !r.error;
+      gpgOptions = new Set(String(r.stdout || "").split("\n").map((l) => l.trim()));
     } catch {
       gpgAvailable = false;
     }
   }
   return gpgAvailable;
+}
+
+// The user's gpg.conf may enable auto-key-retrieve or auto-key-import. Decrypting a signed
+// mail would then contact a keyserver (a read receipt for the sender, triggered in the
+// background) or add the sender's key to the keyring. Indexing must do neither. Only options
+// this gpg knows are passed, so older versions still decrypt.
+const HARDENING = ["--disable-dirmngr", "--no-auto-key-retrieve", "--no-auto-key-import", "--no-auto-key-locate"];
+
+/** The gpg arguments for one decryption (exported for tests). */
+export function decryptArgs() {
+  hasGpg();
+  const hardening = HARDENING.filter((o) => !gpgOptions || gpgOptions.has(o));
+  return ["--batch", "--no-tty", "--pinentry-mode", "error", ...hardening, "--status-fd", "2", "--decrypt"];
 }
 
 /** Number of secret keys in the keyring (metadata count only — key material is never read). */
@@ -106,7 +123,7 @@ export function decryptGpg(cipher, { timeoutMs = 15000, maxBytes = 10 * 1024 * 1
   if (!hasGpg()) return Promise.resolve({ ok: false, error: "gpg is not installed" });
   const input = Buffer.isBuffer(cipher) ? cipher : Buffer.from(String(cipher), "utf8");
   return new Promise((resolve) => {
-    const args = ["--batch", "--no-tty", "--pinentry-mode", "error", "--status-fd", "2", "--decrypt"];
+    const args = decryptArgs();
     const opts = { stdio: ["pipe", "pipe", "pipe"], shell: false };
     const child =
       process.platform === "win32"
@@ -135,8 +152,12 @@ export function decryptGpg(cipher, { timeoutMs = 15000, maxBytes = 10 * 1024 * 1
     child.on("error", () => done({ ok: false, error: "gpg could not be started" }));
     child.on("close", (code) => {
       const status = Buffer.concat(errChunks).toString("utf8");
-      if (code === 0 && size <= maxBytes) return done({ ok: true, buf: Buffer.concat(chunks) });
       if (size > maxBytes) return done({ ok: false, error: "the decrypted content is too large" });
+      // gpg exits non-zero when it cannot verify a signature (e.g. the sender's public key is
+      // not in the keyring) even though the decryption itself succeeded. DECRYPTION_OKAY is
+      // the authoritative signal; integrity failures are reported as DECRYPTION_FAILED.
+      const decrypted = /^\[GNUPG:\] DECRYPTION_OKAY/m.test(status) && !/^\[GNUPG:\] DECRYPTION_FAILED/m.test(status);
+      if (!timedOut && (code === 0 || decrypted)) return done({ ok: true, buf: Buffer.concat(chunks) });
       done({ ok: false, error: classify(status, status.replace(/\[GNUPG:\][^\n]*\n?/g, ""), timedOut) });
     });
     child.stdin.on("error", () => {});

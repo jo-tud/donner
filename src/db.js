@@ -284,11 +284,15 @@ export function purgeDecrypted(db, { accountIds = null } = {}) {
   const sel = `SELECT id FROM messages WHERE encrypted = 1 AND pgp_state = 'decrypted'${filter}`;
   const attachments = db.prepare(`UPDATE attachments SET text = NULL, text_state = 'skipped' WHERE message_id IN (${sel})`).run(...params).changes;
   const events = db.prepare(`DELETE FROM events WHERE message_id IN (${sel})`).run(...params).changes;
+  // Embedding vectors were computed from the plaintext: they would keep the messages findable
+  // by semantic search and are themselves derived from the content. `donner embed` recomputes
+  // them from what is left (headers).
+  const embeddings = db.prepare(`DELETE FROM embeddings WHERE message_id IN (${sel})`).run(...params).changes;
   // body/quoted/att_text updates keep the FTS index in sync through the triggers.
   const messages = db
     .prepare(`UPDATE messages SET body = '', quoted = '', snippet = '', att_text = '', content_error = NULL, pgp_state = NULL, pgp_attempts = 0 WHERE encrypted = 1 AND pgp_state = 'decrypted'${filter}`)
     .run(...params).changes;
-  return { messages, attachments, events };
+  return { messages, attachments, events, embeddings };
 }
 
 /** SQL functions the schema needs (FTS triggers) or migrations use. */

@@ -13,8 +13,10 @@ import { openDb, markForReparse, REPARSE_SETS, purgeDecrypted, countDecrypted } 
 import { decryptForAccount, parseDecryptPgpSpec, loadConfig, saveIndexConfig } from "../../src/config.js";
 import { compileQuery } from "../../src/query.js";
 import { buildMessage, buildPdf } from "../fixtures/mime-builder.js";
-import { makeGpgHome, encrypt, buildPgpMime, buildInlinePgp } from "../fixtures/pgp.js";
-import { mkdtempSync, rmSync } from "node:fs";
+import { makeGpgHome, encrypt, signEncrypt, fingerprint, buildPgpMime, buildInlinePgp } from "../fixtures/pgp.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -102,6 +104,47 @@ test("decryptGpg: success and classified failures never throw", { skip }, async 
   const corrupt = await withHome(keyring.home, () => decryptGpg(`${ARMOR_BEGIN}\ngarbage\n-----END PGP MESSAGE-----`));
   assert.ok(!corrupt.ok);
   assert.match(corrupt.error, /could not be decrypted/);
+});
+
+test("decryptGpg: signed by a sender whose key is not in the keyring still decrypts", { skip }, async () => {
+  // gpg exits with 2 when it cannot check the signature; the decryption itself succeeded.
+  const signer = makeGpgHome();
+  try {
+    const cipher = signEncrypt("Signiert und verschluesselt", signer.home, keyring.home);
+    const r = await withHome(keyring.home, () => decryptGpg(cipher));
+    assert.ok(r.ok, r.error);
+    assert.equal(r.buf.toString("utf8").trim(), "Signiert und verschluesselt");
+  } finally {
+    signer.cleanup();
+  }
+});
+
+test("decryptGpg: a stranger's signed mail triggers no keyserver lookup and no key import", { skip }, async () => {
+  // The user's gpg.conf may enable auto-key-retrieve / auto-key-import. Decrypting a mail
+  // must not contact a keyserver (a read receipt for the sender) or change the keyring.
+  const recipient = makeGpgHome();
+  const signer = makeGpgHome();
+  let connections = 0;
+  const server = createServer((sock) => {
+    connections++;
+    sock.destroy();
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const cipher = signEncrypt("Hallo von einem Fremden", signer.home, recipient.home);
+    const signerFpr = fingerprint(signer.home);
+    writeFileSync(join(recipient.home, "gpg.conf"), `auto-key-retrieve\nauto-key-import\nkeyserver hkp://127.0.0.1:${server.address().port}\n`);
+    const r = await withHome(recipient.home, () => decryptGpg(cipher));
+    assert.ok(r.ok, r.error);
+    assert.equal(r.buf.toString("utf8").trim(), "Hallo von einem Fremden");
+    assert.equal(connections, 0, "no keyserver lookup");
+    const known = spawnSync("gpg", ["--batch", "--list-keys", signerFpr], { env: { ...process.env, GNUPGHOME: recipient.home }, stdio: "ignore" });
+    assert.notEqual(known.status, 0, "the signer's key was not imported");
+  } finally {
+    server.close();
+    recipient.cleanup();
+    signer.cleanup();
+  }
 });
 
 test("hasGpg / countSecretKeys", { skip }, async () => {
@@ -350,6 +393,8 @@ test("purgeDecrypted: clears plaintext (incl. FTS), keeps headers and is:encrypt
     const b = ins.run("c@d", "f", "account2", "Hallo", "Klartext", "", "Klartext", "", "full", 1, "decrypted").lastInsertRowid;
     const c = ins.run("e@f", "f", "account1", "Normal", "Unverschluesselt", "", "", "", "full", 0, null).lastInsertRowid;
     db.prepare("INSERT INTO attachments(message_id, idx, filename, content_type, size, text, text_state) VALUES(?,?,?,?,?,?,?)").run(a, 1, "rechnung.pdf", "application/pdf", 10, "Betreag 99 EUR", "extracted");
+    const vec = Buffer.from(new Float32Array([1, 0]).buffer);
+    for (const id of [a, b, c]) db.prepare("INSERT INTO embeddings(message_id, model, dim, vec) VALUES(?,?,?,?)").run(id, "m", 2, vec);
 
     assert.equal(countDecrypted(db).messages, 2);
     assert.equal(countDecrypted(db, { accountIds: ["account1"] }).messages, 1);
@@ -360,6 +405,8 @@ test("purgeDecrypted: clears plaintext (incl. FTS), keeps headers and is:encrypt
     const res = purgeDecrypted(db, { accountIds: ["account1"] });
     assert.equal(res.messages, 1);
     assert.equal(res.attachments, 1);
+    assert.equal(res.embeddings, 1);
+    assert.deepEqual(db.prepare("SELECT message_id FROM embeddings ORDER BY message_id").all().map((r) => r.message_id), [b, c], "only the purged message loses its embedding");
     const row = db.prepare("SELECT * FROM messages WHERE id = ?").get(a);
     assert.equal(row.body, "");
     assert.equal(row.quoted, "");

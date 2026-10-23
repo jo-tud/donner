@@ -10,7 +10,9 @@ The JSON output shape, error codes and MCP tool names are the public API.
 - PGP-encrypted mail can now be decrypted locally during indexing (PGP/MIME with protected
   headers — the inner Subject/From/To win, a differing outer Subject is kept as a
   `subject_mismatch` signal —, inline PGP and encrypted attachments (`.gpg`/`.pgp`/`.asc`)).
-  gpg runs only as a local child process (stdin/stdout) — no passphrase handling, no key export.
+  gpg runs only as a local child process (stdin/stdout) — no passphrase handling, no key export,
+  no keyserver lookups or key imports even when the user's gpg.conf enables them. Signed mail
+  from senders whose key is not in the keyring is decrypted as well.
 - Decryption is opt-in per account (`index.decryptPgp`: `true` | `false` | a list of accounts,
   e.g. `["Work"]`): `donner setup` and the first interactive `donner sync` ask once and remember
   the answer; `donner sync --decrypt-pgp all|none|<accounts>` decides non-interactively.
@@ -20,7 +22,7 @@ The JSON output shape, error codes and MCP tool names are the public API.
   `trust.subject_mismatch` and the `encrypted` search field: the "was encrypted" signal survives,
   even though the plaintext lives in the index.
 - `donner purge decrypted [--account …] [--yes]`: removes stored plaintext from the index (body,
-  quotes, attachment text, calendar data from inside the encryption). The messages stay as
+  quotes, attachment text, calendar data from inside the encryption, embeddings). The messages stay as
   headers-only, marked `is:encrypted`, and can be decrypted again with `donner sync --reparse pgp` —
   the revocation path for accounts whose decryption is turned off again.
 - `index.hideEncrypted`: encrypted mail **without indexed content** (not decrypted, or purged) is
