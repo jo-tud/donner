@@ -10,6 +10,8 @@ Verschieben oder Löschen bleiben bei `tb`.
 - Node.js ≥ 22.13
 - Thunderbird 128+ mit thunderbird-cli: Add-on „Thunderbird AI Bridge“ und `tb-bridge`
 - Empfohlen: `pdftotext` (Paket `poppler-utils`), damit Text aus PDF-Anhängen zuverlässig gefunden wird
+- Empfohlen: `gpg` (GnuPG, z.B. `sudo apt install gnupg`), damit PGP-verschlüsselte Mails (PGP/MIME,
+  Inline-PGP, verschlüsselte Anhänge) lokal entschlüsselt und durchsuchbar werden
 
 ## Installation
 
@@ -21,7 +23,7 @@ donner setup
 ```
 
 `donner setup` erledigt alles in einem Schritt:
-- prüft die Verbindung zu Thunderbird (und ob `pdftotext` installiert ist),
+- prüft die Verbindung zu Thunderbird (und ob `pdftotext` und `gpg` installiert ist),
 - trägt donner in **Claude Desktop** und **Claude Code** ein (andere Einstellungen bleiben erhalten; die alte Datei wird als `.bak` gesichert),
 - installiert den Skill für Claude Code,
 - baut den Index auf (beim ersten Mal dauert das; Strg-C ist sicher, es geht später weiter),
@@ -58,7 +60,7 @@ donner doctor          # falls etwas nicht stimmt
 | `in:inbox`, `folder:Privat/Rechnungen`, `account:Firma` | Ort |
 | `after:2025-01 before:2025-07`, `newer_than:30d` | Datum (`before` ist exklusiv) |
 | `since:2025-01 until:2025-03` | Zeitraum einschließlich März |
-| `is:unread`, `is:suspicious`, `is:hidden` | Status; verdächtig = Absenderprüfung (DMARC) fehlgeschlagen oder versteckter Text von Unbekannten |
+| `is:unread`, `is:suspicious`, `is:hidden`, `is:encrypted` | Status; verdächtig = Absenderprüfung (DMARC) fehlgeschlagen oder versteckter Text von Unbekannten; `is:encrypted` = die Mail war PGP-verschlüsselt (Inhalt wird entschlüsselt indiziert) |
 
 Umlaute: `müller` und `mueller` finden dasselbe, ebenso `straße` und `strasse`; `muller` ist ein
 anderes Wort. Es gibt keine Wortstamm-Suche. Deutsche Komposita werden nur über den Wortanfang gefunden

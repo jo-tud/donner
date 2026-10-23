@@ -25,6 +25,7 @@ the integrity of actions agents take on the user's behalf.
 | AI agent calling donner | Partially — it may have been manipulated by mail it read | donner is read-only; SQL sandboxed; no write/send/delete capability |
 | Local user and processes running as that user | Yes | same trust as the user's Thunderbird profile |
 | thunderbird-cli bridge | Yes (localhost, optional bearer token) | only read routes are used |
+| gpg / the local keyring | Yes (the user's own GnuPG) | used only as a local `--decrypt` child process (stdin/stdout); no passphrase handling, no key listing or export beyond a metadata count for `doctor` |
 | Embedding service | Local by default; remote only with explicit opt-in | mail text is sent to it |
 
 **Out of scope:** attackers with the user's OS account (they can read the Thunderbird profile anyway),
@@ -43,5 +44,11 @@ provides signals and read-only data, the agent (and the user) decide what to do 
   text helpers are linear-time (ReDoS regression tests).
 - Attachment extraction: size caps, bounded decompression (zip bombs), built-in PDF extractor by default
   (`pdftotext` is opt-in, with timeout), no shell.
+- PGP-encrypted mail (PGP/MIME, inline PGP, encrypted attachments) is decrypted during indexing so it can be
+  searched: the plaintext stays in the local index — the same at-rest exposure class as unencrypted mail there.
+  gpg runs as a local child process (ciphertext in on stdin, plaintext out on stdout, sandboxed with a memory
+  limit and timeout), no passphrase is ever passed or logged, and secret-key material is never read or exported.
+  Messages that cannot be decrypted are indexed without content, marked `is:encrypted` and retried later
+  (`index.decryptPgp: false` switches decryption off entirely).
 - Human output strips terminal control characters from mail content.
 - One runtime dependency (`postal-mime`, no transitive dependencies, no install scripts).

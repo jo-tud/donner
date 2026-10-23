@@ -6,6 +6,21 @@ The JSON output shape, error codes and MCP tool names are the public API.
 
 ## [Unreleased]
 
+### Added
+- PGP-verschlüsselte Mails werden beim Indizieren lokal entschlüsselt (`index.decryptPgp`, standardmäßig
+  an) und sind danach wie jede andere Mail durchsuchbar: PGP/MIME mit protected headers (der innere
+  Subject/From/To gewinnt; ein abweichender äußerer Subject bleibt als `subject_mismatch`-Signal),
+  Inline-PGP und verschlüsselte Anhänge (`.gpg`/`.pgp`/`.asc`). gpg läuft nur als lokaler Kindprozess
+  (stdin/stdout) — keine Passphrase-Behandlung, kein Key-Export.
+- `is:encrypted`, `trust.encrypted`/`trust.decrypted`/`trust.decrypt_error` und das Suchfeld `encrypted`:
+  das Signal „war verschlüsselt“ bleibt erhalten, obwohl der Klartext im Index liegt.
+- Fehlgeschlagene Entschlüsselung (fehlender Schlüssel, leerer gpg-agent-Cache, kaputte Nachricht) bricht
+  nie einen Sync ab: Body bleibt leer, `is:encrypted` wird gesetzt und die nächsten Syncs versuchen es
+  erneut (bis zu 3 Versuche); `donner sync --reparse pgp` startet eine neue Runde.
+- `donner doctor` prüft gpg und Schlüsselbund. Die Index-Schema-Aktualisierung (Schema 5) markiert
+  Mail ohne Text automatisch zum erneuten Lesen — die bereits indizierten verschlüsselten Mails werden
+  so nachträglich entschlüsselt, ohne einen vollen Re-Sync.
+
 ## [0.3.2] — 2026-09-30
 
 ### Fixed
